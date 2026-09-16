@@ -1838,7 +1838,9 @@ function alertaCaidaBrand(brand){
     var r = evaluarCaidaEntidad(ventas.filter(function(v){return v.sucursal===s.nombre;}), desde, fin);
     if(r) items.push({tipo:'Sucursal', nombre:s.nombre, actual:r.actual, promedio:r.promedio, pct:r.pct});
   });
-  Store.asesores(brand.id).filter(function(a){return a.activo && esAsesorReal(a.nombre);}).forEach(function(a){
+  /* Un asesor Externo/Socio tampoco entra en esta alerta de rendimiento — mismo criterio
+     que en el resto del panel (ver repAsesorActivo). */
+  Store.asesores(brand.id).filter(function(a){return esAsesorReal(a.nombre) && repAsesorActivo(brand.id, a.nombre);}).forEach(function(a){
     var r = evaluarCaidaEntidad(ventas.filter(function(v){return v.asesor===a.nombre;}), desde, fin);
     if(r) items.push({tipo:'Asesor', nombre:a.nombre, actual:r.actual, promedio:r.promedio, pct:r.pct});
   });
@@ -2943,7 +2945,9 @@ function renderAsesoresTab(brand, panel){
 function renderGestionTab(brand, panel){
   function byId(id){ return panel.querySelector('#'+id); }
 
-  var asesoresList = Store.asesores(brand.id).filter(function(a){ return a.activo && esAsesorReal(a.nombre); }).sort(function(a,b){ return a.nombre.localeCompare(b.nombre, 'es'); });
+  /* Gestión Comercial también es evaluación de rendimiento: un asesor Externo/Socio no
+     entra aquí, solo se identifica en las ventas — mismo criterio que el resto del panel. */
+  var asesoresList = Store.asesores(brand.id).filter(function(a){ return esAsesorReal(a.nombre) && repAsesorActivo(brand.id, a.nombre); }).sort(function(a,b){ return a.nombre.localeCompare(b.nombre, 'es'); });
   if(asesoresList.length===0){
     panel.innerHTML = '<div class="card">'+emptyState('Aún no hay asesores activos en '+brand.name, 'Agrega asesores desde Configuración → Sucursales y asesores. Aparecerán aquí para calificar su semana.', 'Configuración')+'</div>';
     return;
@@ -4576,24 +4580,13 @@ function renderInicio(){
   var totalLeads = allVentas.filter(function(v){return esCanalLeads(v.canal);}).length;
   var periodoAct = periodoActual();
 
-  /* Un asesor desactivado (ya no trabaja con nosotros) deja de salir en "mejor asesor" /
-     rankings — pero sus ventas ya registradas se quedan intactas en el historial (Asesores,
-     Ventas, Leads, Comisiones de su marca), nunca se borran. Se busca por nombre en la
-     lista de asesores de esa marca: si hay un registro y está inactivo, se excluye de estas
-     comparativas; si no hay registro (p. ej. "ASESORES EXTERNOS") se deja, porque no es una
-     persona que se pueda desactivar. */
-  var asesorActivoPorMarca = {};
-  BRANDS.forEach(function(b){
-    var map = {};
-    Store.asesores(b.id).forEach(function(a){ map[a.nombre] = a.activo; });
-    asesorActivoPorMarca[b.id] = map;
-  });
+  /* Un asesor desactivado (ya no trabaja con nosotros), o marcado como Externo/Socio (se
+     agrega solo para identificar quién hizo la venta, nunca para medirle el rendimiento),
+     deja de salir en "mejor asesor" / rankings — pero sus ventas ya registradas se quedan
+     intactas en el historial (Asesores, Ventas, Leads, Comisiones de su marca), nunca se
+     borran. Ver repAsesorActivo más abajo, que ya incluye ambos criterios. */
   function esVentaDeAsesorActivo(v){
-    if(!esAsesorReal(v.asesor)) return false;
-    var map = asesorActivoPorMarca[v.marca];
-    if(!map) return true;
-    var estado = map[v.asesor];
-    return estado !== false;
+    return esAsesorReal(v.asesor) && repAsesorActivo(v.marca, v.asesor);
   }
   var allVentasAsesorActivo = allVentas.filter(esVentaDeAsesorActivo);
   var cumplimientos = [];
@@ -4683,10 +4676,12 @@ function renderInicio(){
     var t = topDe(b.id, function(v){return v.sucursal;});
     return {label: b.name, value: t?t.total:0, note: t?t.nombre:'sin datos', color: BRAND_COLOR[b.id]};
   });
-  /* "Mejor asesor de cada marca" — igual que topDe pero excluyendo asesores desactivados
-     de esa marca, para que alguien que ya no trabaja con nosotros no salga como el mejor. */
+  /* "Mejor asesor de cada marca" — igual que topDe pero excluyendo asesores desactivados o
+     de tipo Externo/Socio de esa marca (ver repAsesorActivo), para que alguien que ya no
+     trabaja con nosotros, o al que solo se identifica sin medirle el rendimiento, no salga
+     como el mejor. */
   function topAsesorActivoDe(brandId){
-    var propias = Store.ventas(brandId).filter(function(v){ return asesorActivoPorMarca[brandId][v.asesor] !== false && esAsesorReal(v.asesor); });
+    var propias = Store.ventas(brandId).filter(function(v){ return esAsesorReal(v.asesor) && repAsesorActivo(brandId, v.asesor); });
     var grouped = groupBy(propias, function(v){return v.asesor;});
     var keys = Object.keys(grouped);
     if(!keys.length) return null;
@@ -5228,15 +5223,20 @@ function repCanalLabel(canalReal){
 function repDesdeLead(canalReal){ return esCanalLeads(canalReal); }
 function repCanalColorReal(canalReal){ return canalColor(canalReal); }
 
-/* ---- Igual que esAsesorReal, pero además excluye a quien esté DESACTIVADO en Configuración:
-   si la supervisora desactiva a un asesor es porque ya no trabaja con el equipo, así que no
-   debe aparecer como persona en los rankings/comparativas/matriz del reporte — mismo criterio
-   ya usado en el widget "mejor asesor" de Inicio (asesorActivoPorMarca/esVentaDeAsesorActivo).
-   Sus ventas ya registradas NO se borran ni se restan de los totales generales, de sucursal,
-   de canal o del Detalle — solo dejan de aparecer atribuidas a su nombre. */
+/* ---- Igual que esAsesorReal, pero además excluye a quien esté DESACTIVADO en Configuración,
+   o a quien esté marcado como tipo Externo/Socio: si la supervisora desactiva a un asesor es
+   porque ya no trabaja con el equipo, y un asesor Externo/Socio se agrega solo para poder
+   identificar quién hizo la venta — nunca para medirle el rendimiento — así que ninguno de
+   los dos debe aparecer como persona en los rankings/comparativas/matriz/alertas del panel
+   (mismo criterio en Inicio, Dashboard, Comparativas, Gestión y Reportes). Sus ventas ya
+   registradas NO se borran ni se restan de los totales generales, de sucursal, de canal o
+   del Detalle — solo dejan de aparecer atribuidas a su nombre. */
 function repAsesorActivo(marcaId, nombre){
   var a = Store.asesores(marcaId).find(function(x){return x.nombre===nombre;});
-  return a ? a.activo!==false : true;
+  if(!a) return true;
+  if(a.activo===false) return false;
+  if(a.tipo && a.tipo!=='Interno') return false;
+  return true;
 }
 function esAsesorReportable(v){
   return esAsesorReal(v.asesor) && repAsesorActivo(v._marca, v.asesor);
