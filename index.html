@@ -2025,7 +2025,10 @@ function renderSubpanel(brand, tab){
     var totalUnidades = ventas.reduce(function(s,v){return s+(v.cantidad||0);},0);
     var totalLeads = ventas.filter(function(v){return esCanalLeads(v.canal);}).length;
     var porCanal = groupBy(ventas, function(v){return v.canal;});
-    var porAsesor = groupBy(ventas.filter(function(v){return esAsesorReal(v.asesor);}), function(v){return v.asesor;});
+    /* "Ventas por asesor" del dashboard: igual que en Inicio/Reportes, un asesor desactivado
+       (ya no trabaja con el equipo) deja de aparecer aquí — sus ventas ya registradas no se
+       tocan ni se restan de ningún otro total, solo dejan de listarse atribuidas a su nombre. */
+    var porAsesor = groupBy(ventas.filter(function(v){return esAsesorReal(v.asesor) && repAsesorActivo(brand.id, v.asesor);}), function(v){return v.asesor;});
     var porSucursal = groupBy(ventas, function(v){return v.sucursal;});
     var metaAct = metaMarca(brand.id, periodoAct);
     var cumpAct = metaAct ? cumplimientoMeta(brand.id, metaAct) : null;
@@ -2248,7 +2251,9 @@ function renderComparativasTab(brand, panel){
     var resA = resumenRango(ventas, aDesde, aHasta);
     var resB = resumenRango(ventas, bDesde, bHasta);
     var porSucursal = compararPorEntidadEnRango(ventas, aDesde, aHasta, bDesde, bHasta, function(v){return v.sucursal;});
-    var ventasAsesorReal = ventas.filter(function(v){return esAsesorReal(v.asesor);});
+    /* Igual que en Inicio/Reportes: un asesor desactivado (ya no trabaja con el equipo) ya
+       no debe aparecer en esta comparativa, ni siquiera con su historial viejo. */
+    var ventasAsesorReal = ventas.filter(function(v){return esAsesorReal(v.asesor) && repAsesorActivo(brand.id, v.asesor);});
     var porAsesor = compararPorEntidadEnRango(ventasAsesorReal, aDesde, aHasta, bDesde, bHasta, function(v){return v.asesor;});
 
     out.innerHTML =
