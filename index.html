@@ -4596,14 +4596,21 @@ function renderInicio(){
   });
   var cumpProm = cumplimientos.length ? Math.round(cumplimientos.reduce(function(s,x){return s+x;},0)/cumplimientos.length) : null;
 
-  /* Leads recibidos según BASIK (embudo de contacto) — se suma el reporte MÁS RECIENTE de
-     cada marca, no todos los que se hayan importado, para no contar el mismo período dos veces. */
+  /* Leads recibidos según BASIK: total GENERAL, no solo de la quincena más reciente — se
+     suma cada reporte que se haya importado de cada marca (uno por quincena/período), para
+     que Inicio refleje el acumulado desde que se empezó a importar, no solo el último
+     período. Si algún día se llega a importar dos reportes que se pisan en fechas (mismo
+     rango exacto ya se reemplaza solo, ver Store.replaceBasikReporte; pero un rango que se
+     solape parcialmente con otro SÍ se sumaría dos veces esos días en común), toca borrar
+     el reporte viejo desde la pestaña Leads de esa marca antes de importar el nuevo. */
   var basikTotal = 0, basikContactados = 0, marcasConBasik = 0;
   BRANDS.forEach(function(b){
-    var reportes = Store.basikReportes(b.id).slice().sort(function(a,b2){ return b2.hasta.localeCompare(a.hasta); });
+    var reportes = Store.basikReportes(b.id);
     if(reportes.length){
-      basikTotal += reportes[0].leadsTotal;
-      basikContactados += reportes[0].contactados;
+      reportes.forEach(function(r){
+        basikTotal += r.leadsTotal||0;
+        basikContactados += r.contactados||0;
+      });
       marcasConBasik++;
     }
   });
@@ -5360,16 +5367,20 @@ function repCanalPorEntidad(ventas, keyFn, limiteEntidades){
 }
 
 /* ---- Leads (punto 14): se toma de los reportes BASIK importados cuyo rango [desde,hasta]
-   cae COMPLETO dentro del rango del reporte — un reporte semanal que cruza el borde del
-   período no se parte ni se prorratea (mismo criterio ya usado en leadsPeriodoAsesor). Las
-   "ventas provenientes de leads" se leen de las ventas reales con canal "Leads", nunca
-   de un conteo aparte. Si no hay ningún reporte BASIK dentro del rango, se marca sin datos —
+   SE SOLAPA con el rango del reporte (no hace falta que caiga completo adentro) — como
+   normalmente se importa un BASIK nuevo cada quincena y se deja el viejo archivado, el
+   período elegido para el reporte casi siempre va a cruzar el borde entre dos quincenas, y
+   antes eso descartaba el reporte entero. Ahora, si un BASIK se solapa aunque sea un día con
+   el rango pedido, se cuenta completo (no se parte ni se prorratea el día exacto en que
+   cambia de quincena — es una aproximación, no un recorte exacto al día). Las "ventas
+   provenientes de leads" se leen de las ventas reales con canal "Leads", nunca de un conteo
+   aparte. Si no hay ningún reporte BASIK que se cruce con el rango, se marca sin datos —
    nunca se inventan cifras de leads. */
 function repLeadsResumen(marcaIds, desde, hasta, ventasFiltradas){
   var reportes = [];
   (marcaIds||[]).forEach(function(id){
     Store.basikReportes(id).forEach(function(r){
-      if(r.desde>=desde && r.hasta<=hasta) reportes.push(Object.assign({}, r, {_marca:id}));
+      if(r.hasta>=desde && r.desde<=hasta) reportes.push(Object.assign({}, r, {_marca:id}));
     });
   });
   var ventasSlec = ventasFiltradas.filter(function(v){ return esCanalLeads(v.canal); });
@@ -6090,7 +6101,7 @@ function construirReporteHTML(rd, cfg, theme){
 
   var leadsHTML;
   if(!rd.leads.tieneDatos){
-    leadsHTML = '<p class="rp-empty">No hay reportes de BASIK importados que caigan completos dentro de este período — no hay información suficiente sobre leads para mostrar aquí.</p>' +
+    leadsHTML = '<p class="rp-empty">No hay ningún reporte de BASIK importado que se cruce con este período — no hay información suficiente sobre leads para mostrar aquí.</p>' +
       (rd.leads.ventasSlec.count ? '<p class="rp-empty">Sí se registran '+rd.leads.ventasSlec.count+' venta(s) por el canal Leads en el período, por '+repMoneyStr(rd.leads.ventasSlec.total)+'.</p>' : '');
   } else {
     leadsHTML = '<div class="rp-kpigrid">'+
@@ -7306,13 +7317,13 @@ function repV2LeadsMarcaKpiHTML(leadsContexto){
   }).join('');
 }
 /* ---- Texto del rango de fechas de leads (para el pill del hero) — mismo criterio de
-   "reporte BASIK cae completo dentro del rango" ya usado en repLeadsResumen, aquí solo para
+   "reporte BASIK se solapa con el rango" ya usado en repLeadsResumen, aquí solo para
    mostrar el rango real usado, sin duplicar el cálculo de leads en sí. */
 function repV2LeadsPeriodoTexto(marcaIds, per){
   var reportes = [];
   (marcaIds||[]).forEach(function(id){
     Store.basikReportes(id).forEach(function(r){
-      if(r.desde>=per.desde && r.hasta<=per.hasta) reportes.push(r);
+      if(r.hasta>=per.desde && r.desde<=per.hasta) reportes.push(r);
     });
   });
   if(!reportes.length) return null;
@@ -8106,7 +8117,7 @@ function repV2ConstruirDocumento(rd, cfg, theme){
       (rd.leads.tieneDatos ?
         ('<div class="grid-hero"><div class="panel"><div class="panel-title">🔻 Embudo de leads</div><div id="funnel-ov"></div></div>'+
          '<div class="panel"><div class="panel-title">🎯 Conversión por asesor</div><div class="chart-box h-320"><canvas id="chart-leads-conv-ov"></canvas></div></div></div>'+ins_('insight-leads-ov'))
-        : '<p style="color:var(--text-faint);font-size:13px;">No hay reportes de BASIK importados que caigan completos dentro de este período.</p>') +
+        : '<p style="color:var(--text-faint);font-size:13px;">No hay ningún reporte de BASIK importado que se cruce con este período.</p>') +
     '</div>';
 
   var b8 =
@@ -8201,7 +8212,7 @@ function repV2ConstruirDocumento(rd, cfg, theme){
   var tabLeads = '<div id="tab-leads" class="tabpanel"><div class="wrap"><div class="block">'+
     '<div class="seccion-titulo">Leads — Panel Basik'+(leadsPeriodoTxt?(' ('+repEsc(leadsPeriodoTxt)+')'):'')+'<span class="linea"></span></div>';
   if(!rd.leads.tieneDatos){
-    tabLeads += '<p style="color:var(--text-faint);font-size:13px;">No hay reportes de BASIK importados que caigan completos dentro de este período — no hay información suficiente sobre leads para mostrar aquí.</p>';
+    tabLeads += '<p style="color:var(--text-faint);font-size:13px;">No hay ningún reporte de BASIK importado que se cruce con este período — no hay información suficiente sobre leads para mostrar aquí.</p>';
   } else {
     tabLeads +=
       '<div class="kpi-grid" id="kpi-leads" style="grid-template-columns:repeat(5,1fr);">'+kpiLeadsHtml+'</div>'+
