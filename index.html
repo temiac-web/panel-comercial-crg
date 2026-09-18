@@ -1340,6 +1340,16 @@ Store.updateTarea = function(id, data){
   Store.set(Store.k.tareas, list);
   return true;
 };
+Store.toggleCumplimiento = function(id, key){
+  var list = Store.tareas();
+  var i = list.findIndex(function(x){return x.id===id;});
+  if(i===-1) return false;
+  var c = Object.assign({}, list[i].cumplimientos || {});
+  if(c[key]) delete c[key]; else c[key] = new Date().toISOString();
+  list[i] = Object.assign({}, list[i], {cumplimientos: c});
+  Store.set(Store.k.tareas, list);
+  return !!c[key];
+};
 Store.deleteTarea = function(id){
   Store.set(Store.k.tareas, Store.tareas().filter(function(x){return x.id!==id;}));
 };
@@ -3810,15 +3820,79 @@ function prioridadColor(p){
   if(p==='Media') return 'var(--warning)';
   return 'var(--text-mute)';
 }
+/* ---- Cumplimiento por período: las tareas Diaria/Semanal/Quincenal/Mensual se marcan una vez
+   por período (día, semana lunes-domingo, quincena, mes) y guardan su historial en t.cumplimientos. ---- */
+function _iso(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function tareaEsRecurrente(t){ return ['Diaria','Semanal','Quincenal','Mensual'].indexOf(t.frecuencia)!==-1; }
+function periodoKey(frec, d){
+  d = d || new Date();
+  if(frec==='Diaria') return _iso(d);
+  if(frec==='Semanal'){ var l = new Date(d.getFullYear(), d.getMonth(), d.getDate()); l.setDate(l.getDate() - ((l.getDay()+6)%7)); return 'S'+_iso(l); }
+  if(frec==='Quincenal') return _iso(d).slice(0,7)+(d.getDate()<=15?'-Q1':'-Q2');
+  if(frec==='Mensual') return _iso(d).slice(0,7);
+  return '';
+}
+function periodoAnterior(frec, d){
+  var x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  if(frec==='Diaria') x.setDate(x.getDate()-1);
+  else if(frec==='Semanal') x.setDate(x.getDate()-7);
+  else if(frec==='Quincenal'){ if(x.getDate()>15) x.setDate(1); else { x.setDate(0); x.setDate(20); } }
+  else if(frec==='Mensual'){ x.setDate(1); x.setMonth(x.getMonth()-1); }
+  return x;
+}
+function periodoEtiqueta(frec){ return {Diaria:'hoy', Semanal:'esta semana', Quincenal:'esta quincena', Mensual:'este mes'}[frec] || ''; }
+function tareaHechaPeriodo(t){ return !!(t.cumplimientos && t.cumplimientos[periodoKey(t.frecuencia)]); }
+function tareaEstadoEfectivo(t){
+  if(tareaEsRecurrente(t)) return tareaHechaPeriodo(t) ? 'Completada' : 'Pendiente';
+  return t.estado;
+}
+/* Últimos n períodos (el más reciente a la derecha) y racha actual de períodos seguidos. */
+function tareaHistorial(t, n){
+  var out = [], d = new Date();
+  for(var i=0;i<n;i++){
+    out.unshift(!!(t.cumplimientos && t.cumplimientos[periodoKey(t.frecuencia, d)]));
+    d = periodoAnterior(t.frecuencia, d);
+  }
+  return out;
+}
+function tareaRacha(t){
+  var d = new Date(), n = 0;
+  if(!tareaHechaPeriodo(t)) d = periodoAnterior(t.frecuencia, d); // hoy aún puede completarse
+  while(n < 400 && t.cumplimientos && t.cumplimientos[periodoKey(t.frecuencia, d)]){ n++; d = periodoAnterior(t.frecuencia, d); }
+  return n;
+}
 function tareaVencida(t){
+  if(tareaEsRecurrente(t)) return false;
   var hoy = new Date().toISOString().slice(0,10);
   return !!(t.fechaLimite && t.fechaLimite < hoy && t.estado !== 'Completada');
 }
 function estadoBadgeTarea(t){
   var vencida = tareaVencida(t);
-  var color = t.estado==='Completada' ? 'var(--positive)' : (vencida ? 'var(--negative)' : 'var(--text)');
-  var label = vencida ? 'Vencida' : t.estado;
+  var ef = tareaEstadoEfectivo(t);
+  var color = ef==='Completada' ? 'var(--positive)' : (vencida ? 'var(--negative)' : 'var(--text)');
+  var label = vencida ? 'Vencida' : (tareaEsRecurrente(t) && ef==='Completada' ? 'Hecha '+periodoEtiqueta(t.frecuencia) : ef);
   return '<span style="font-weight:700;color:'+color+';">'+label+'</span>';
+}
+function tareaHistorialHTML(t){
+  if(!tareaEsRecurrente(t)) return '';
+  var h = tareaHistorial(t, 7), r = tareaRacha(t);
+  var unidad = {Diaria:'días', Semanal:'semanas', Quincenal:'quincenas', Mensual:'meses'}[t.frecuencia];
+  var dots = h.map(function(ok){ return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px;background:'+(ok?'var(--positive)':'var(--border, rgba(255,255,255,.18))')+';"></span>'; }).join('');
+  return '<div title="Últimos 7 períodos (el más reciente a la derecha)" style="margin-top:5px;display:flex;align-items:center;gap:8px;">'+dots+
+    '<span style="font-size:11px;color:var(--text-mute);">'+h.filter(Boolean).length+'/7'+(r>1?' · racha de '+r+' '+unidad:'')+'</span></div>';
+}
+function tareasResumenHTML(lista){
+  var partes = [];
+  ['Diaria','Semanal','Quincenal','Mensual'].forEach(function(f){
+    var g = lista.filter(function(t){ return t.frecuencia===f; });
+    if(!g.length) return;
+    var hechas = g.filter(tareaHechaPeriodo).length;
+    var col = hechas===g.length ? 'var(--positive)' : 'var(--text)';
+    partes.push('<div style="min-width:150px;"><div style="font-size:11px;color:var(--text-mute);text-transform:uppercase;letter-spacing:.08em;">'+f+'s · '+periodoEtiqueta(f)+'</div>'+
+      '<div style="font-size:20px;font-weight:700;color:'+col+';">'+hechas+' <span style="font-size:13px;font-weight:500;color:var(--text-mute);">de '+g.length+'</span></div></div>');
+  });
+  if(!partes.length) return '';
+  return '<div class="card" style="margin-bottom:14px;display:flex;gap:28px;flex-wrap:wrap;align-items:center;">'+partes.join('')+'</div>';
 }
 function marcaLabel(id){
   if(!id) return 'General';
@@ -3864,8 +3938,9 @@ function renderTareasTab(panel){
         '<button class="btn btn-primary" id="tf-new"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Nueva tarea</button>' +
       '</div>' +
       '<div id="tareaFormHolder"></div>' +
+      '<div id="tareasResumen"></div>' +
       '<div class="table-wrap">' +
-        '<table><thead><tr><th>Título</th><th>Categoría</th><th>Marca</th><th>Frecuencia</th><th>Prioridad</th><th>Fecha límite</th><th>Estado</th><th>Evidencia</th><th></th></tr></thead>' +
+        '<table><thead><tr><th style="width:64px;">Hecha</th><th>Título</th><th>Categoría</th><th>Marca</th><th>Frecuencia</th><th>Prioridad</th><th>Fecha límite</th><th>Estado</th><th>Evidencia</th><th></th></tr></thead>' +
         '<tbody id="ttbody"></tbody></table>' +
       '</div>';
 
@@ -3884,23 +3959,25 @@ function renderTareasTab(panel){
     function applyFilters(){
       var estado = byId('tf-estado').value, marca = byId('tf-marca').value;
       var lista = Store.tareas().filter(function(t){
-        if(estado && t.estado !== estado) return false;
+        if(estado && tareaEstadoEfectivo(t) !== estado) return false;
         if(marca==='__general' && t.marca) return false;
         if(marca && marca!=='__general' && t.marca !== marca) return false;
         return true;
       });
       lista = lista.slice().sort(function(a,b){
-        var aDone = a.estado==='Completada', bDone = b.estado==='Completada';
+        var aDone = tareaEstadoEfectivo(a)==='Completada', bDone = tareaEstadoEfectivo(b)==='Completada';
         if(aDone !== bDone) return aDone ? 1 : -1;
         var af = a.fechaLimite || '9999-99-99', bf = b.fechaLimite || '9999-99-99';
         return af.localeCompare(bf);
       });
       var tbody = byId('ttbody');
       if(lista.length===0){
-        tbody.innerHTML = '<tr class="table-empty"><td colspan="9">No hay tareas que coincidan con estos filtros.</td></tr>';
+        tbody.innerHTML = '<tr class="table-empty"><td colspan="10">No hay tareas que coincidan con estos filtros.</td></tr>';
       } else {
         tbody.innerHTML = lista.map(function(t){
-          return '<tr><td>'+t.titulo+(t.notas?'<div style="font-size:11px;color:var(--text-mute);margin-top:2px;">'+t.notas+'</div>':'')+'</td>' +
+          var rec = tareaEsRecurrente(t), hecha = tareaEstadoEfectivo(t)==='Completada';
+          var chk = '<td><input type="checkbox" data-chk="'+t.id+'" '+(hecha?'checked ':'')+'style="width:20px;height:20px;cursor:pointer;accent-color:var(--positive, #3fb950);" title="'+(rec?'Marcar como hecha '+periodoEtiqueta(t.frecuencia):'Marcar como completada')+'"></td>';
+          return '<tr>'+chk+'<td>'+t.titulo+tareaHistorialHTML(t)+(t.notas?'<div style="font-size:11px;color:var(--text-mute);margin-top:2px;">'+t.notas+'</div>':'')+'</td>' +
             '<td>'+t.categoria+'</td><td>'+marcaLabel(t.marca)+'</td><td>'+t.frecuencia+'</td>' +
             '<td><span style="font-weight:700;color:'+prioridadColor(t.prioridad)+';">'+t.prioridad+'</span></td>' +
             '<td>'+(t.fechaLimite||'—')+'</td><td>'+estadoBadgeTarea(t)+'</td><td>'+(t.evidencia||'—')+'</td>' +
@@ -3908,6 +3985,18 @@ function renderTareasTab(panel){
             '<button class="icon-sm-btn danger" data-del="'+t.id+'" title="Eliminar"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/></svg></button></div></td></tr>';
         }).join('');
       }
+      var resumen = byId('tareasResumen');
+      if(resumen) resumen.innerHTML = tareasResumenHTML(Store.tareas());
+      tbody.querySelectorAll('[data-chk]').forEach(function(cb){
+        cb.addEventListener('change', function(){
+          var id = cb.getAttribute('data-chk');
+          var t = Store.tareas().find(function(x){return x.id===id;});
+          if(!t) return;
+          if(tareaEsRecurrente(t)) Store.toggleCumplimiento(id, periodoKey(t.frecuencia));
+          else Store.updateTarea(id, {estado: cb.checked ? 'Completada' : 'Pendiente'});
+          applyFilters();
+        });
+      });
       tbody.querySelectorAll('[data-edit]').forEach(function(btn){
         btn.addEventListener('click', function(){ openForm(btn.getAttribute('data-edit')); });
       });
@@ -3975,7 +4064,7 @@ function renderTareasTab(panel){
       evidencia: byId('tf-form-evid').value.trim(),
       notas: byId('tf-form-notas').value.trim()
     };
-    if(existing){ Store.updateTarea(existing.id, data); }
+    if(existing){ data.cumplimientos = existing.cumplimientos || {}; Store.updateTarea(existing.id, data); }
     else { Store.addTarea(data); }
     closeForm();
     draw();
