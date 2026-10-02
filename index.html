@@ -469,6 +469,7 @@ body.solo-lectura #cfgCanalAdd{display:none!important;}
           <div class="field grow"><label>Sucursal</label><select id="cf-sucursal"><option value="">Todas</option></select></div>
           <div class="field grow"><label>Asesor</label><select id="cf-asesor"><option value="">Todos</option></select></div>
           <div class="field grow"><label>Canal</label><select id="cf-canal"><option value="">Todos</option></select></div>
+          <div class="field grow"><label>Buscar N° Nota Fina</label><input type="text" id="cf-buscar" placeholder="Ej. 1555" autocomplete="off" inputmode="search"></div>
           <button class="btn btn-ghost" id="cf-reset"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.6-6.4"/><path d="M3 4v5h5"/></svg>Limpiar</button>
         </div>
         <div class="table-wrap">
@@ -2606,6 +2607,7 @@ function renderVentasTab(brand, panel){
         '<div class="field grow"><label>Sucursal</label><select id="vf-suc"><option value="">Todas</option>'+Store.sucursales(brand.id).map(function(s){return '<option>'+s.nombre+'</option>';}).join('')+'</select></div>' +
         '<div class="field grow"><label>Asesor</label><select id="vf-ase"><option value="">Todos</option>'+Store.asesores(brand.id).map(function(a){return asesorOpcion(a,false);}).join('')+'</select></div>' +
         '<div class="field grow"><label>Canal</label><select id="vf-can"><option value="">Todos</option>'+canales.map(function(c){return '<option>'+c+'</option>';}).join('')+'</select></div>' +
+        '<div class="field grow"><label>Buscar N° Nota Fina</label><input type="text" id="vf-buscar" placeholder="Ej. 1555" autocomplete="off" inputmode="search"></div>' +
         '<button class="btn btn-ghost" id="vf-reset"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 2.6-6.4"/><path d="M3 4v5h5"/></svg>Limpiar</button>' +
         '<button class="btn btn-primary" id="vf-new"'+(sinSetup?' disabled title="Agrega al menos una sucursal y un asesor activos en Configuración"':'')+'><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Registrar venta</button>' +
       '</div>' +
@@ -2617,11 +2619,13 @@ function renderVentasTab(brand, panel){
         '<span class="total tabular"><span>Total seleccionado</span> $<span id="vtotal">0.00</span></span></div>' +
       '</div>';
 
-    var ids = ['vf-desde','vf-hasta','vf-suc','vf-ase','vf-can'];
+    var ids = ['vf-desde','vf-hasta','vf-suc','vf-ase','vf-can','vf-buscar'];
     function applyFilters(){
       var desde = byId('vf-desde').value, hasta = byId('vf-hasta').value;
       var suc = byId('vf-suc').value, ase = byId('vf-ase').value, can = byId('vf-can').value;
+      var q = byId('vf-buscar').value.trim().toLowerCase();
       var filtradas = Store.ventas(brand.id).filter(function(v){
+        if(q && String(v.notaFina||'').toLowerCase().indexOf(q)===-1) return false;
         if(desde && v.fecha < desde) return false;
         if(hasta && v.fecha > hasta) return false;
         if(suc && v.sucursal !== suc) return false;
@@ -2659,6 +2663,7 @@ function renderVentasTab(brand, panel){
       });
     }
     ids.forEach(function(id){ byId(id).addEventListener('change', applyFilters); });
+    byId('vf-buscar').addEventListener('input', applyFilters);
     byId('vf-reset').addEventListener('click', function(){ ids.forEach(function(id){ byId(id).value=''; }); applyFilters(); });
     byId('vf-new').addEventListener('click', function(){ openForm(null); });
     applyFilters();
@@ -4597,7 +4602,9 @@ function refreshConsolidado(){
   var desde = document.getElementById('cf-desde').value;
   var hasta = document.getElementById('cf-hasta').value;
   var suc = sucSel.value, ase = aseSel.value, can = canSel.value;
+  var qNota = document.getElementById('cf-buscar').value.trim().toLowerCase();
   var filtradas = all.filter(function(v){
+    if(qNota && String(v.notaFina||'').toLowerCase().indexOf(qNota)===-1) return false;
     if(marca && v.marca !== marca) return false;
     if(desde && v.fecha < desde) return false;
     if(hasta && v.fecha > hasta) return false;
@@ -4626,8 +4633,9 @@ function renderConsolidado(){
     ['cf-marca','cf-desde','cf-hasta','cf-sucursal','cf-asesor','cf-canal'].forEach(function(id){
       document.getElementById(id).addEventListener('change', refreshConsolidado);
     });
+    document.getElementById('cf-buscar').addEventListener('input', refreshConsolidado);
     document.getElementById('cf-reset').addEventListener('click', function(){
-      ['cf-marca','cf-desde','cf-hasta','cf-sucursal','cf-asesor','cf-canal'].forEach(function(id){ document.getElementById(id).value=''; });
+      ['cf-marca','cf-desde','cf-hasta','cf-sucursal','cf-asesor','cf-canal','cf-buscar'].forEach(function(id){ document.getElementById(id).value=''; });
       refreshConsolidado();
     });
     document.getElementById('cons-gar-descargar').addEventListener('click', function(){
@@ -8448,6 +8456,13 @@ function setView(id){
 }
 document.querySelectorAll('.nav-item').forEach(function(btn){
   btn.addEventListener('click', function(){ setView(btn.getAttribute('data-view')); });
+});
+document.getElementById('searchBtn').addEventListener('click', function(){
+  /* En una marca usa su buscador de Ventas; si no, abre el Consolidado (todas las marcas) */
+  var activa = document.querySelector('.view.active');
+  var campo = activa ? (activa.querySelector('#vf-buscar') || activa.querySelector('#cf-buscar')) : null;
+  if(!campo){ setView('consolidado'); campo = document.getElementById('cf-buscar'); }
+  if(campo){ campo.scrollIntoView({block:'center'}); campo.focus(); campo.select(); }
 });
 document.getElementById('menuBtn').addEventListener('click', function(){
   document.getElementById('sidebar').classList.add('open');
