@@ -411,6 +411,19 @@ body.solo-lectura #cfgCanalAdd{display:none!important;}
 
         <div id="alertaCaidaCard" style="margin-bottom:22px;"></div>
 
+        <div class="filterbar" id="inicioTotalFiltro">
+          <div class="field grow"><label>Período del dashboard</label><select id="it-per">
+            <option value="todo">Todo el historial</option>
+            <option value="mes">Este mes</option>
+            <option value="mesant">Mes anterior</option>
+            <option value="semana">Esta semana</option>
+            <option value="rango">Rango personalizado</option>
+          </select></div>
+          <div class="field" id="it-desde-wrap" style="display:none;"><label>Desde</label><input type="date" id="it-desde"></div>
+          <div class="field" id="it-hasta-wrap" style="display:none;"><label>Hasta</label><input type="date" id="it-hasta"></div>
+          <div class="field grow"><label>Marca</label><select id="it-marca"><option value="">Todas (consolidado)</option></select></div>
+        </div>
+
         <div class="grid-kpi" id="inicioKpis"></div>
 
         <div class="section-head">
@@ -4661,7 +4674,60 @@ function renderConsolidado(){
 renderConsolidado();
 
 /* ============ INICIO ============ */
+/* ---- Inicio: selector del período/marca de la tarjeta "Ventas totales" ---- */
+function localISO(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function fechaDMA(iso){ var p=(iso||'').split('-'); return p.length===3 ? p[2]+'/'+p[1]+'/'+p[0] : '—'; }
+function inicioTotalRango(){
+  var per = document.getElementById('it-per').value;
+  var hoy = new Date();
+  var mesAct = localISO(hoy).slice(0,7);
+  var r = {desde:'', hasta:'', label:'todo el historial', mes:null};
+  if(per==='mes'){ r.desde=mesAct+'-01'; r.hasta=mesAct+'-31'; r.label=periodoLabel(mesAct); r.mes=mesAct; }
+  else if(per==='mesant'){ var ma=mesAnterior(mesAct); r.desde=ma+'-01'; r.hasta=ma+'-31'; r.label=periodoLabel(ma); r.mes=ma; }
+  else if(per==='semana'){
+    var off=(hoy.getDay()+6)%7;
+    var ini=new Date(hoy.getFullYear(),hoy.getMonth(),hoy.getDate()-off);
+    var fin=new Date(ini.getFullYear(),ini.getMonth(),ini.getDate()+6);
+    r.desde=localISO(ini); r.hasta=localISO(fin); r.label='esta semana ('+fechaDMA(r.desde).slice(0,5)+' al '+fechaDMA(r.hasta).slice(0,5)+')';
+  }
+  else if(per==='rango'){
+    r.desde=document.getElementById('it-desde').value; r.hasta=document.getElementById('it-hasta').value;
+    if(r.desde && r.hasta) r.label='del '+fechaDMA(r.desde)+' al '+fechaDMA(r.hasta);
+    else if(r.desde) r.label='desde el '+fechaDMA(r.desde);
+    else if(r.hasta) r.label='hasta el '+fechaDMA(r.hasta);
+    else r.label='todo el historial';
+  }
+  return r;
+}
+var inicioTotalInit = false;
+function initInicioTotalFiltro(){
+  if(inicioTotalInit) return; inicioTotalInit = true;
+  var mSel = document.getElementById('it-marca');
+  BRANDS.forEach(function(b){ var o=document.createElement('option'); o.value=b.id; o.textContent=b.name; mSel.appendChild(o); });
+  try{
+    var g = JSON.parse(localStorage.getItem('inicioTotalSel')||'null');
+    if(g){
+      if(g.per) document.getElementById('it-per').value=g.per;
+      if(g.marca) mSel.value=g.marca;
+      if(g.desde) document.getElementById('it-desde').value=g.desde;
+      if(g.hasta) document.getElementById('it-hasta').value=g.hasta;
+    }
+  }catch(e){}
+  function onChange(){
+    var esRango = document.getElementById('it-per').value==='rango';
+    document.getElementById('it-desde-wrap').style.display = esRango?'':'none';
+    document.getElementById('it-hasta-wrap').style.display = esRango?'':'none';
+    try{ localStorage.setItem('inicioTotalSel', JSON.stringify({per:document.getElementById('it-per').value, marca:mSel.value, desde:document.getElementById('it-desde').value, hasta:document.getElementById('it-hasta').value})); }catch(e){}
+    renderInicio();
+  }
+  ['it-per','it-marca','it-desde','it-hasta'].forEach(function(id){ document.getElementById(id).addEventListener('change', onChange); });
+  var esRango0 = document.getElementById('it-per').value==='rango';
+  document.getElementById('it-desde-wrap').style.display = esRango0?'':'none';
+  document.getElementById('it-hasta-wrap').style.display = esRango0?'':'none';
+}
+
 function renderInicio(){
+  initInicioTotalFiltro();
   var f = fraseDelDia();
   document.getElementById('motivCat').textContent = f.cat;
   document.getElementById('motivText').textContent = f.texto;
@@ -4673,10 +4739,33 @@ function renderInicio(){
       alertaCaidaEmpresaHTML(peorCaidaEmpresa()) +
     '</div>';
 
-  var allVentas = Store.consolidado();
+  /* TODO Inicio responde al filtro de arriba (período + marca): vSel = ventas de una marca
+     dentro del período elegido; ventasRawSel = ventas de la(s) marca(s) elegida(s) SIN
+     recortar por período (para las comparativas mes contra mes). */
+  var rangoTot = inicioTotalRango();
+  var marcaTotId = document.getElementById('it-marca').value;
+  var marcaTot = marcaTotId ? BRANDS.filter(function(b){return b.id===marcaTotId;})[0] : null;
+  var MARCAS_SEL = marcaTot ? [marcaTot] : BRANDS;
+  var etiquetaMarcas = marcaTot ? marcaTot.name : 'las 3 marcas';
+  function enRango(v){
+    var fch = v.fecha||'';
+    if(rangoTot.desde && fch < rangoTot.desde) return false;
+    if(rangoTot.hasta && fch > rangoTot.hasta) return false;
+    return true;
+  }
+  function vSel(id){ return Store.ventas(id).filter(enRango); }
+  function topDeSel(brandId, keyFn){
+    var grouped = groupBy(vSel(brandId), keyFn);
+    var keys = Object.keys(grouped);
+    if(!keys.length) return null;
+    keys.sort(function(a,c){ return grouped[c].total - grouped[a].total; });
+    return {nombre: keys[0], total: grouped[keys[0]].total};
+  }
+  var ventasRawSel = Store.consolidado().filter(function(v){ return !marcaTotId || v.marca===marcaTotId; });
+  var allVentas = ventasRawSel.filter(enRango);
   var totalVentas = allVentas.reduce(function(s,v){return s+(v.total||0);},0);
   var totalLeads = allVentas.filter(function(v){return esCanalLeads(v.canal);}).length;
-  var periodoAct = periodoActual();
+  var periodoAct = rangoTot.mes || periodoActual();
 
   /* Un asesor desactivado (ya no trabaja con nosotros), o marcado como Externo/Socio (se
      agrega solo para identificar quién hizo la venta, nunca para medirle el rendimiento),
@@ -4688,7 +4777,7 @@ function renderInicio(){
   }
   var allVentasAsesorActivo = allVentas.filter(esVentaDeAsesorActivo);
   var cumplimientos = [];
-  BRANDS.forEach(function(b){
+  MARCAS_SEL.forEach(function(b){
     var m = metaMarca(b.id, periodoAct);
     if(m){ var c = cumplimientoMeta(b.id, m); if(c) cumplimientos.push(c.pct); }
   });
@@ -4702,8 +4791,11 @@ function renderInicio(){
      solape parcialmente con otro SÍ se sumaría dos veces esos días en común), toca borrar
      el reporte viejo desde la pestaña Leads de esa marca antes de importar el nuevo. */
   var basikTotal = 0, basikContactados = 0, marcasConBasik = 0;
-  BRANDS.forEach(function(b){
-    var reportes = Store.basikReportes(b.id);
+  function reporteEnRango(r){
+    return (!rangoTot.desde || !r.hasta || r.hasta>=rangoTot.desde) && (!rangoTot.hasta || !r.desde || r.desde<=rangoTot.hasta);
+  }
+  MARCAS_SEL.forEach(function(b){
+    var reportes = Store.basikReportes(b.id).filter(reporteEnRango);
     if(reportes.length){
       reportes.forEach(function(r){
         basikTotal += r.leadsTotal||0;
@@ -4718,8 +4810,8 @@ function renderInicio(){
      Mejor marca: suma de ventas por marca. Mejor asesor: se agrupa por nombre Y marca a
      la vez (dos asesores de distinta marca con el mismo nombre son personas distintas,
      bases independientes, nunca se suman) — mismo criterio que "Ranking de asesores". */
-  var ventasPorMarcaKpi = BRANDS.map(function(b){
-    return {marca:b, total: Store.ventas(b.id).reduce(function(s,v){return s+(v.total||0);},0)};
+  var ventasPorMarcaKpi = MARCAS_SEL.map(function(b){
+    return {marca:b, total: vSel(b.id).reduce(function(s,v){return s+(v.total||0);},0)};
   }).sort(function(a,b){return b.total-a.total;});
   var mejorMarcaKpi = ventasPorMarcaKpi[0];
   var asesorGroupedKpi = {};
@@ -4736,20 +4828,31 @@ function renderInicio(){
   /* "¿Cómo va este mes comparado con el mes pasado?" — comparativa de períodos (empresa),
      ver motor mesAnterior/sumaVentasPeriodo/deltaSpan arriba. */
   var periodoAntKpi = mesAnterior(periodoAct);
-  var ventasMesActKpi = sumaVentasPeriodo(allVentas, periodoAct);
-  var ventasMesAntKpi = sumaVentasPeriodo(allVentas, periodoAntKpi);
+  var ventasMesActKpi = sumaVentasPeriodo(ventasRawSel, periodoAct);
+  var ventasMesAntKpi = sumaVentasPeriodo(ventasRawSel, periodoAntKpi);
+
+  /* Tarjeta "Ventas totales": período y marca elegidos en la barra de arriba */
+  var ventasSelTot = allVentas;
+  var totalSelTot = totalVentas;
+  var notaTot = ventasSelTot.length
+    ? ventasSelTot.length+' venta'+(ventasSelTot.length===1?'':'s')+' · '+rangoTot.label
+    : 'Sin ventas · '+rangoTot.label;
+  if(rangoTot.mes && ventasSelTot.length){
+    var antTot = mesAnterior(rangoTot.mes);
+    notaTot += ' · '+deltaSpan(totalSelTot, sumaVentasPeriodo(ventasRawSel, antTot))+' vs. '+periodoLabel(antTot);
+  }
 
   document.getElementById('inicioKpis').innerHTML =
-    kpi('Ventas totales (consolidado)', '$'+money(totalVentas), 'ventas', allVentas.length?allVentas.length+' ventas registradas · '+deltaSpan(ventasMesActKpi, ventasMesAntKpi)+' vs. '+periodoLabel(periodoAntKpi):'Sin ventas registradas aún') +
+    kpi(marcaTot ? 'Ventas totales — '+marcaTot.name : 'Ventas totales (consolidado)', '$'+money(totalSelTot), 'ventas', notaTot) +
     kpi('Mejor marca', (mejorMarcaKpi && mejorMarcaKpi.total>0) ? mejorMarcaKpi.marca.name : '—', 'comparativas', (mejorMarcaKpi && mejorMarcaKpi.total>0) ? '$'+money(mejorMarcaKpi.total)+' en ventas' : 'Sin ventas registradas aún') +
     kpi('Mejor asesor (3 marcas)', mejorAsesorKpi ? mejorAsesorKpi.nombre : '—', 'asesores', mejorAsesorKpi ? ('$'+money(mejorAsesorKpi.total)+' · '+(mejorAsesorMarcaKpi?mejorAsesorMarcaKpi.name:'')) : 'Sin ventas registradas aún') +
     kpi('Leads recibidos (BASIK)', marcasConBasik?String(basikTotal):'—', 'leads', marcasConBasik?basikContactados+' contactados · '+marcasConBasik+' marca'+(marcasConBasik===1?'':'s')+' con reporte':'Importa el reporte BASIK de cada marca en su pestaña Leads') +
-    kpi('Leads que cerraron venta', String(totalLeads), 'leads', allVentas.length?'Ventas con canal = Leads':'Sin datos aún') +
+    kpi('Leads que cerraron venta', String(totalLeads), 'leads', allVentas.length?'Ventas con canal = Leads · '+rangoTot.label:'Sin datos aún') +
     kpi('Cumplimiento promedio', cumpProm!==null?cumpProm+'%':'—', 'meta', cumpProm!==null?cumplimientos.length+' marca'+(cumplimientos.length===1?'':'s')+' con meta en '+periodoLabel(periodoAct):'Configura metas por marca en su pestaña Metas') +
     kpi('Incidencias abiertas', '0', 'incidencia');
 
-  document.getElementById('brandQuick').innerHTML = BRANDS.map(function(b){
-    var v = Store.ventas(b.id);
+  document.getElementById('brandQuick').innerHTML = MARCAS_SEL.map(function(b){
+    var v = vSel(b.id);
     var t = v.reduce(function(s,x){return s+(x.total||0);},0);
     return '<div class="card" data-goto="'+b.id+'">' +
       '<div class="row"><div class="brand-badge" style="width:34px;height:34px;font-size:12px;">'+b.initial+'</div>' +
@@ -4763,22 +4866,22 @@ function renderInicio(){
 
   /* Comparativa entre marcas: responde "¿qué marca vende más?", "¿por qué canal/sucursal
      vende más cada una?" — un vistazo de nivel EMPRESA sin tener que entrar a cada marca. */
-  var ventasPorMarca = BRANDS.map(function(b){
-    return {label: b.name, value: Store.ventas(b.id).reduce(function(s,v){return s+(v.total||0);},0), color: BRAND_COLOR[b.id]};
+  var ventasPorMarca = MARCAS_SEL.map(function(b){
+    return {label: b.name, value: vSel(b.id).reduce(function(s,v){return s+(v.total||0);},0), color: BRAND_COLOR[b.id]};
   });
   /* "¿Qué marca está creciendo y cuál cayendo vs. el período anterior?" — mes actual de
      cada marca contra su mes anterior, con el badge ▲/▼ del motor de Comparativas. */
-  var crecimientoPorMarca = BRANDS.map(function(b){
+  var crecimientoPorMarca = MARCAS_SEL.map(function(b){
     var vb = Store.ventas(b.id);
     var act = sumaVentasPeriodo(vb, periodoAct), ant = sumaVentasPeriodo(vb, periodoAntKpi);
     return {label: b.name, value: act, note: deltaSpan(act, ant)+' · ant. $'+money(ant), color: BRAND_COLOR[b.id]};
   });
-  var topCanalPorMarca = BRANDS.map(function(b){
-    var t = topDe(b.id, function(v){return v.canal;});
+  var topCanalPorMarca = MARCAS_SEL.map(function(b){
+    var t = topDeSel(b.id, function(v){return v.canal;});
     return {label: b.name, value: t?t.total:0, note: t?t.nombre:'sin datos', color: BRAND_COLOR[b.id]};
   });
-  var topSucursalPorMarca = BRANDS.map(function(b){
-    var t = topDe(b.id, function(v){return v.sucursal;});
+  var topSucursalPorMarca = MARCAS_SEL.map(function(b){
+    var t = topDeSel(b.id, function(v){return v.sucursal;});
     return {label: b.name, value: t?t.total:0, note: t?t.nombre:'sin datos', color: BRAND_COLOR[b.id]};
   });
   /* "Mejor asesor de cada marca" — igual que topDe pero excluyendo asesores desactivados o
@@ -4786,14 +4889,14 @@ function renderInicio(){
      trabaja con nosotros, o al que solo se identifica sin medirle el rendimiento, no salga
      como el mejor. */
   function topAsesorActivoDe(brandId){
-    var propias = Store.ventas(brandId).filter(function(v){ return esAsesorReal(v.asesor) && repAsesorActivo(brandId, v.asesor); });
+    var propias = vSel(brandId).filter(function(v){ return esAsesorReal(v.asesor) && repAsesorActivo(brandId, v.asesor); });
     var grouped = groupBy(propias, function(v){return v.asesor;});
     var keys = Object.keys(grouped);
     if(!keys.length) return null;
     keys.sort(function(a,b){ return grouped[b].total - grouped[a].total; });
     return {nombre: keys[0], total: grouped[keys[0]].total};
   }
-  var topAsesorPorMarca = BRANDS.map(function(b){
+  var topAsesorPorMarca = MARCAS_SEL.map(function(b){
     var t = topAsesorActivoDe(b.id);
     return {label: b.name, value: t?t.total:0, note: t?t.nombre:'sin datos', color: BRAND_COLOR[b.id]};
   });
@@ -4803,7 +4906,7 @@ function renderInicio(){
      distintas, bases independientes, nunca se suman). El color identifica de qué marca
      es cada barra, igual que en "Ventas por marca". Un asesor desactivado ya no aparece
      en el ranking de asesores (pero sí en el de sucursales, que no depende de personas). */
-  var todasVentas = Store.consolidado();
+  var todasVentas = allVentas;
   function rankingPorEmpresa(keyFn, ventasBase){
     var grouped = {};
     (ventasBase || todasVentas).forEach(function(v){
@@ -4823,23 +4926,23 @@ function renderInicio(){
   var rankingSucursalesEmpresa = rankingPorEmpresa(function(v){return v.sucursal;});
   /* Cumplimiento de meta por marca en el período actual — responde "¿qué marca va mejor
      encaminada este mes?" sin tener que entrar a cada una. */
-  var cumplimientoPorMarca = BRANDS.map(function(b){
+  var cumplimientoPorMarca = MARCAS_SEL.map(function(b){
     var m = metaMarca(b.id, periodoAct);
     var c = m ? cumplimientoMeta(b.id, m) : null;
     return {label: b.name, value: c?c.pct:0, note: c?('$'+money(c.total)+' de $'+money(c.monto)):'sin meta configurada', color: BRAND_COLOR[b.id]};
   });
   /* % de ventas que entran por Leads en cada marca, período actual — el canal se identifica
      EXCLUSIVAMENTE como canal==="Leads" (esCanalLeads), nunca mezclado con tienda o WhatsApp. */
-  var leadsSharePorMarca = BRANDS.map(function(b){
-    var ventasPeriodo = Store.ventas(b.id).filter(function(v){ return (v.fecha||'').slice(0,7)===periodoAct; });
+  var leadsSharePorMarca = MARCAS_SEL.map(function(b){
+    var ventasPeriodo = vSel(b.id);
     var leadsCount = ventasPeriodo.filter(function(v){ return esCanalLeads(v.canal); }).length;
     var pct = ventasPeriodo.length ? (leadsCount/ventasPeriodo.length*100) : 0;
     return {label: b.name, value: pct, note: ventasPeriodo.length?(leadsCount+' de '+ventasPeriodo.length+' ventas'):'sin ventas este período', color: BRAND_COLOR[b.id]};
   });
   /* Comisión de líder por marca, período actual — 1% de lo vendido, SIEMPRE separada de la
      comisión de asesor (nunca sumadas), tal como en la pestaña Comisiones. */
-  var comisionLiderPorMarca = BRANDS.map(function(b){
-    var totalPeriodo = Store.ventas(b.id).filter(function(v){ return (v.fecha||'').slice(0,7)===periodoAct; }).reduce(function(s,v){return s+(v.total||0);},0);
+  var comisionLiderPorMarca = MARCAS_SEL.map(function(b){
+    var totalPeriodo = vSel(b.id).reduce(function(s,v){return s+(v.total||0);},0);
     return {label: b.name, value: totalPeriodo*0.01, color: BRAND_COLOR[b.id]};
   });
   /* Leads recibidos por marca y qué tanto convierte cada una — se usa el reporte BASIK
@@ -4847,18 +4950,18 @@ function renderInicio(){
      período dos veces), y se cruza contra ventas propias con canal="Leads" dentro de ESE
      mismo rango de fechas — igual criterio que en la pestaña Leads de cada marca. */
   var reportesRecientesPorMarca = {};
-  BRANDS.forEach(function(b){
-    var reportes = Store.basikReportes(b.id).slice().sort(function(a,c){ return (c.hasta||'').localeCompare(a.hasta||''); });
+  MARCAS_SEL.forEach(function(b){
+    var reportes = Store.basikReportes(b.id).filter(reporteEnRango).slice().sort(function(a,c){ return (c.hasta||'').localeCompare(a.hasta||''); });
     reportesRecientesPorMarca[b.id] = reportes.length ? reportes[0] : null;
   });
   /* El pill de BASIK ("📅 13 de agosto de 2026 — 8 de septiembre de 2026") es demasiado
      largo para una nota de fila — empuja el nombre de la marca fuera de vista. Se usa el
      formato corto día/mes global (fechaCorta) en su lugar. */
-  var leadsRecibidosPorMarca = BRANDS.map(function(b){
+  var leadsRecibidosPorMarca = MARCAS_SEL.map(function(b){
     var r = reportesRecientesPorMarca[b.id];
     return {label: b.name, value: r?r.leadsTotal:0, note: r?(fechaCorta(r.desde)+'–'+fechaCorta(r.hasta)):'sin reporte BASIK', color: BRAND_COLOR[b.id]};
   });
-  var conversionLeadsPorMarca = BRANDS.map(function(b){
+  var conversionLeadsPorMarca = MARCAS_SEL.map(function(b){
     var r = reportesRecientesPorMarca[b.id];
     if(!r || !r.leadsTotal) return {label: b.name, value: 0, note: 'sin reporte BASIK', color: BRAND_COLOR[b.id]};
     var ventasLeadsEnRango = Store.ventas(b.id).filter(function(v){
@@ -4869,8 +4972,8 @@ function renderInicio(){
   /* "¿Cómo va la venta día a día?" — tendencia diaria de las 3 marcas, todo su historial
      (superponer el período anterior queda para el motor de Comparativas). Identidad de
      marca = color fijo por marca, igual que en el resto de Inicio. */
-  var ventasDiaPorMarca = BRANDS.map(function(b){
-    var porFecha = groupBy(Store.ventas(b.id), function(v){return v.fecha;});
+ var ventasDiaPorMarca = MARCAS_SEL.map(function(b){
+    var porFecha = groupBy(vSel(b.id), function(v){return v.fecha;});
     var points = Object.keys(porFecha).sort().map(function(f){ return {x:f, y:porFecha[f].total}; });
     return {label: b.name, color: BRAND_COLOR[b.id], points: points};
   });
@@ -4883,24 +4986,24 @@ function renderInicio(){
   });
   /* "¿Estamos dependiendo más de Leads o de tienda física que el mes pasado?" a nivel
      EMPRESA — mezcla de canales de este mes vs. el mes anterior, las 3 marcas juntas. */
-  var canalMixEmpresa = canalDumbbellRows(canalPctPeriodo(allVentas, periodoAct), canalPctPeriodo(allVentas, periodoAntKpi));
+  var canalMixEmpresa = canalDumbbellRows(canalPctPeriodo(ventasRawSel, periodoAct), canalPctPeriodo(ventasRawSel, periodoAntKpi));
   /* "¿Cómo va subiendo/bajando la comisión mes a mes?" por marca — 1% de lo vendido,
      identidad de marca = color fijo, igual que "Ventas día a día — las 3 marcas". */
-  var comisionesPorMarca = BRANDS.map(function(b){
-    return {label: b.name, color: BRAND_COLOR[b.id], points: comisionesMensuales(Store.ventas(b.id))};
+  var comisionesPorMarca = MARCAS_SEL.map(function(b){
+    return {label: b.name, color: BRAND_COLOR[b.id], points: comisionesMensuales(vSel(b.id))};
   });
   document.getElementById('inicioCharts').innerHTML =
-    '<div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Ventas día a día — las 3 marcas</h3></div>' +
+    '<div class="card" style="margin-bottom:14px;"><div class="card-head"><h3>Ventas día a día — '+etiquetaMarcas+'</h3></div>' +
       brandLegendHTML() + lineChartHTML(ventasDiaPorMarca, {height:210, emptyMsg:'Sin ventas registradas aún.'}) +
-      '<p style="font-size:11px;color:var(--text-mute);margin-top:8px;">Todo el historial registrado, sumado por día. Pasa el cursor sobre un punto para ver el monto exacto.</p>' +
+      '<p style="font-size:11px;color:var(--text-mute);margin-top:8px;">Ventas de '+rangoTot.label+', sumadas por día. Pasa el cursor sobre un punto para ver el monto exacto.</p>' +
     '</div>' +
     '<div class="card" style="margin-bottom:14px;">' +
-      '<div class="card-head"><h3>Mezcla de canales — '+periodoLabel(periodoAct)+' vs. '+periodoLabel(periodoAntKpi)+' (toda la empresa)</h3></div>' +
+      '<div class="card-head"><h3>Mezcla de canales — '+periodoLabel(periodoAct)+' vs. '+periodoLabel(periodoAntKpi)+' ('+(marcaTot?marcaTot.name:'toda la empresa')+')</h3></div>' +
       canalDumbbellHTML(canalMixEmpresa, {emptyMsg:'Sin ventas registradas en estos 2 meses.'}) +
       '<p style="font-size:11px;color:var(--text-mute);margin-top:4px;">Las 3 marcas juntas. % de las ventas de cada mes que vino de cada canal.</p>' +
     '</div>' +
     '<div class="card" style="margin-bottom:14px;">' +
-      '<div class="card-head"><h3>Comisiones mes a mes — las 3 marcas</h3></div>' +
+      '<div class="card-head"><h3>Comisiones mes a mes — '+etiquetaMarcas+'</h3></div>' +
       brandLegendHTML() + lineChartHTML(comisionesPorMarca, {height:210, emptyMsg:'Sin ventas registradas aún.', tickFmt:mesCorto, tooltipDateFmt:mesCorto}) +
       '<p style="font-size:11px;color:var(--text-mute);margin-top:8px;">1% del total vendido en cada marca, por mes. La comisión de asesor (sumada entre todo el equipo) y la comisión de líder son siempre este mismo monto — por separado, nunca sumadas entre sí.</p>' +
     '</div>' +
@@ -4911,11 +5014,11 @@ function renderInicio(){
       '<div class="card"><div class="card-head"><h3>Sucursal más fuerte de cada marca</h3></div>'+rankedBarsHTML(topSucursalPorMarca, {emptyMsg:'Sin ventas registradas aún.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">El nombre junto al monto es la sucursal que más vende en esa marca.</p></div>' +
       '<div class="card"><div class="card-head"><h3>Mejor asesor de cada marca</h3></div>'+rankedBarsHTML(topAsesorPorMarca, {emptyMsg:'Sin ventas registradas aún.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">El nombre junto al monto es el asesor que más vende en esa marca.</p></div>' +
       '<div class="card"><div class="card-head"><h3>Cumplimiento de meta — '+periodoLabel(periodoAct)+'</h3></div>'+pctBarsHTML(cumplimientoPorMarca, {emptyMsg:'Sin metas configuradas aún.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">La línea marca el 100% de la meta del período. Configura metas por marca desde la pestaña Metas de cada una.</p></div>' +
-      '<div class="card"><div class="card-head"><h3>% de ventas por Leads — '+periodoLabel(periodoAct)+'</h3></div>'+pctBarsHTML(leadsSharePorMarca, {scaleMax:100, emptyMsg:'Sin ventas registradas este período.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">Solo cuenta ventas con canal "Leads" — nunca mezcladas con tienda o WhatsApp.</p></div>' +
-      '<div class="card"><div class="card-head"><h3>Comisión de líder — '+periodoLabel(periodoAct)+'</h3></div>'+rankedBarsHTML(comisionLiderPorMarca, {emptyMsg:'Sin ventas registradas este período.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">1% de lo vendido en el período, por marca. Es tu comisión como líder, siempre aparte de la del asesor.</p></div>' +
+      '<div class="card"><div class="card-head"><h3>% de ventas por Leads — '+rangoTot.label+'</h3></div>'+pctBarsHTML(leadsSharePorMarca, {scaleMax:100, emptyMsg:'Sin ventas registradas este período.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">Solo cuenta ventas con canal "Leads" — nunca mezcladas con tienda o WhatsApp.</p></div>' +
+      '<div class="card"><div class="card-head"><h3>Comisión de líder — '+rangoTot.label+'</h3></div>'+rankedBarsHTML(comisionLiderPorMarca, {emptyMsg:'Sin ventas registradas este período.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">1% de lo vendido en el período, por marca. Es tu comisión como líder, siempre aparte de la del asesor.</p></div>' +
       '<div class="card"><div class="card-head"><h3>Leads recibidos por marca</h3></div>'+rankedBarsHTML(leadsRecibidosPorMarca, {money:false, emptyMsg:'Importa el reporte BASIK de cada marca.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">Según el reporte BASIK más reciente de cada marca.</p></div>' +
       '<div class="card"><div class="card-head"><h3>Qué marca convierte mejor sus Leads</h3></div>'+pctBarsHTML(conversionLeadsPorMarca, {scaleMax:100, emptyMsg:'Importa el reporte BASIK de cada marca.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">Ventas con canal = Leads sobre el total de leads recibidos, en el mismo período del reporte de cada marca.</p></div>' +
-      '<div class="card"><div class="card-head"><h3>% de ventas por canal — toda la empresa</h3></div>'+pctBarsHTML(canalPctEmpresa, {scaleMax:100, showTarget:false, emptyMsg:'Sin ventas registradas aún.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">Las 3 marcas juntas, todo el historial.</p></div>' +
+      '<div class="card"><div class="card-head"><h3>% de ventas por canal — toda la empresa</h3></div>'+pctBarsHTML(canalPctEmpresa, {scaleMax:100, showTarget:false, emptyMsg:'Sin ventas registradas aún.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">'+(marcaTot?marcaTot.name:'Las 3 marcas juntas')+', '+rangoTot.label+'.</p></div>' +
     '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px;">' +
       '<div class="card"><div class="card-head"><h3>Ranking de asesores — toda la empresa</h3></div>'+brandLegendHTML()+rankedBarsHTML(rankingAsesoresEmpresa, {emptyMsg:'Sin ventas registradas aún.'})+'<p style="font-size:11px;color:var(--text-mute);margin-top:10px;">Las 3 marcas juntas, de mayor a menor venta.</p></div>' +
