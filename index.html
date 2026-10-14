@@ -8978,6 +8978,7 @@ function evIniciar(){
   fuentes.forEach(function(f){
     EV.unsubs.push(f[1].onSnapshot(function(snap){
       EV.data[f[0]] = snap.docs.map(function(d){ var o=d.data(); o.id=d.id; return o; });
+      if(f[0]==='casos' || f[0]==='usuarios'){ try{ if(typeof GTS!=='undefined' && GTS && GTS.refresh) GTS.refresh(); }catch(e){} }
       if(f[0]==='ventas_asesor') evImportar();
       if(f[0]==='casos') evImportarCasos();
       evActualizarBadge();
@@ -10038,101 +10039,193 @@ async function hashPassword(pw){
 }
 
 /* =====================================================================
-   STORE — abstrae persistencia: capacidad "db" compartida o localStorage
+   STORE — la Mesa lee y escribe los casos del PANEL DE ASESORES (colección "casos" del mismo
+   Firebase del CRG). Ya NO usa la base de datos de la Mesa vieja.
+   Cada caso del panel se traduce al formato de la Mesa (panToMesa) para que todas las pantallas,
+   filtros y reportes funcionen igual que siempre; lo que se edita aquí se traduce de vuelta
+   (panToPatch / panToDoc). Lo que solo existe en la Mesa (incidencias, historial, estados
+   "En revisión" y "No procede", horas de resolución…) se guarda como campos extra del mismo caso.
 ===================================================================== */
+const PAN_MARCA_ID = {'TEKIO':'tekio','INFOT':'infot','MEGA LAPTOP':'megalaptop'};
+const PAN_MARCA_NOM = {tekio:'TEKIO', infot:'INFOT', megalaptop:'MEGA LAPTOP'};
+const PAN_EST = {'Pendiente':'Pendiente','En revisión':'En proceso','En proceso':'En proceso','Resuelto':'Resuelto','No procede':'Resuelto'};
+const PAN_INC_KEY = 'crg_gts_incident_types';
+function pnorm(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim(); }
+function pIso(d){ return d ? d+'T12:00:00.000Z' : null; }
+function iso2d(v){
+  if(!v) return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const t = new Date(v); if(isNaN(t)) return '';
+  return t.getFullYear()+'-'+('0'+(t.getMonth()+1)).slice(-2)+'-'+('0'+t.getDate()).slice(-2);
+}
+function panCasos(){ try{ return EV.data.casos || []; }catch(e){ return []; } }
+function panUsuarios(){ try{ return EV.data.usuarios || []; }catch(e){ return []; } }
+/* Une el nombre escrito en un caso con la persona real de "Equipo" (mismo nombre, o mismo primer
+   nombre si solo hay una con ese rol). Si no hay persona, queda como histórico inactivo. */
+function panPersona(nombre, rol, us){
+  const n = pnorm(nombre); if(!n) return null;
+  const cand = (us||[]).filter(u=>u.rol===rol);
+  let m = cand.find(u=>pnorm(u.nombre)===n);
+  if(!m){ const t = n.split(' ')[0]; const igual = cand.filter(u=>pnorm(u.nombre).split(' ')[0]===t); if(igual.length===1) m = igual[0]; }
+  return m ? {id:m.id, uid:m.id, name:m.nombre, active:m.activo!==false} : {id:'x_'+n.replace(/ /g,'_'), uid:'', name:nombre, active:false};
+}
+function panBuildConfig(){
+  const us = panUsuarios(), casos = panCasos();
+  const advisors = new Map(), techs = new Map(), branches = new Map();
+  us.forEach(u=>{
+    const o = {id:u.id, name:u.nombre||u.email||u.id, active:u.activo!==false};
+    if(u.rol==='asesor') advisors.set(u.id, o);
+    if(u.rol==='tecnico') techs.set(u.id, o);
+  });
+  casos.forEach(c=>{
+    if(c.asesor){ const p = panPersona(c.asesor,'asesor',us); if(p && !advisors.has(p.id)) advisors.set(p.id,{id:p.id,name:p.name,active:false}); }
+    if(c.tecnico){ const p = panPersona(c.tecnico,'tecnico',us); if(p && !techs.has(p.id)) techs.set(p.id,{id:p.id,name:p.name,active:false}); }
+  });
+  Object.keys(PAN_MARCA_NOM).forEach(mid=>{
+    let lista = []; try{ lista = PanelStore.sucursales(mid) || []; }catch(e){}
+    lista.forEach(s=>{ if(!s || !s.nombre) return; const id = 'br_'+slug(s.nombre); branches.set(id,{id, name:s.nombre, brand:PAN_MARCA_NOM[mid], active:s.activo!==false}); });
+  });
+  casos.forEach(c=>{
+    const brand = PAN_MARCA_NOM[c.marca]; if(!brand || !c.sucursal) return;
+    const id = 'br_'+slug(c.sucursal);
+    if(!branches.has(id)) branches.set(id,{id, name:c.sucursal, brand, active:false});
+  });
+  let inc = null; try{ inc = PanelStore.get(PAN_INC_KEY, null); }catch(e){}
+  const byName = (a,b)=>String(a.name).localeCompare(String(b.name));
+  return {
+    incidentTypes: (Array.isArray(inc) && inc.length) ? inc : INCIDENT_TYPES_DEFAULT.slice(),
+    branches: [...branches.values()].sort(byName),
+    technicians: [...techs.values()].sort(byName),
+    advisors: [...advisors.values()].sort(byName),
+    administrators: [], adminPasswordHash: '', updatedAt: nowIso()
+  };
+}
+function panToMesa(c, us){
+  const tipo = /serv/i.test(c.tipo||'') ? 'Servicio Técnico' : 'Garantía';
+  const aP = c.asesor ? panPersona(c.asesor,'asesor',us) : null;
+  const asesorId = (c.asesorUid && us.some(u=>u.id===c.asesorUid)) ? c.asesorUid : (aP ? aP.id : '');
+  const tP = c.tecnico ? panPersona(c.tecnico,'tecnico',us) : null;
+  const tecnicoId = (c.tecnicoUid && c.tecnicoUid!=='importado' && us.some(u=>u.id===c.tecnicoUid)) ? c.tecnicoUid : (tP ? tP.id : '');
+  const estado = (c.estadoMesa && PAN_EST[c.estadoMesa]===c.estado) ? c.estadoMesa : (PAN_EST[c.estado] ? c.estado : 'Pendiente');
+  const cerrado = estado==='Resuelto' || estado==='No procede';
+  const fecha = c.fechaRecibido || iso2d(c.creadoEn) || '';
+  const creadoEn = (typeof c.creadoEn==='string' && c.creadoEn) ? c.creadoEn : (c.creadoMs ? new Date(c.creadoMs).toISOString() : (fecha ? fecha+'T12:00:00.000Z' : nowIso()));
+  const fechaResolucion = (cerrado && c.fechaResuelto) ? pIso(c.fechaResuelto) : null;
+  let horas = null;
+  if(cerrado){
+    if('tiempoResolucionHorasFecha' in c && c.tiempoResolucionHorasFecha===(c.fechaResuelto||'')){
+      horas = (typeof c.tiempoResolucionHoras==='number') ? c.tiempoResolucionHoras : null;
+    } else if(fechaResolucion && fecha){
+      horas = hoursBetween(fecha+'T00:00:00', fechaResolucion);
+    }
+  }
+  const entregado = !!c.fechaEntregado;
+  const historial = (Array.isArray(c.historial) && c.historial.length) ? c.historial
+    : [{usuario:c.creadoPor||c.asesor||'Panel de Asesores', fecha:creadoEn, campo:'Creación', valorAnterior:null, valorNuevo:'Caso creado ('+tipo+')'}];
+  return {
+    id:c.id, folio:c.folio||'', tipo, fecha,
+    marca: PAN_MARCA_NOM[c.marca] || String(c.marca||'').toUpperCase(),
+    sucursalId: c.sucursal ? 'br_'+slug(c.sucursal) : '', sucursal: c.sucursal||'',
+    cliente:c.cliente||'', telefono:c.telefono||'', equipo:c.equipo||'', serial:c.serial||'', falla:c.falla||'',
+    asesorId, asesorNombre:c.asesor||'', tecnicoId, tecnicoNombre:c.tecnico||'',
+    fechaAsignacion: c.fechaAsignacion || (tecnicoId ? creadoEn : null),
+    estado, fechaResolucion, tiempoResolucionHoras:horas,
+    observacion:c.observaciones||'', incidencias:Array.isArray(c.incidencias)?c.incidencias:[],
+    responsableIncidencia:c.responsableIncidencia||'', evidencia:c.evidencia||'',
+    entregado, fechaEntrega: entregado ? pIso(c.fechaEntregado) : null,
+    reincidenciaDe:c.reincidenciaDe||'', creadoPor:c.creadoPor||c.asesor||'', historial, creadoEn
+  };
+}
+/* Caso completo de la Mesa -> documento del panel (crear / importar respaldo). */
+function panToDoc(m, us, opt){
+  opt = opt || {};
+  const est = PAN_EST[m.estado] ? m.estado : 'Pendiente';
+  const resuelto = est==='Resuelto' || est==='No procede';
+  const aP = m.asesorNombre ? panPersona(m.asesorNombre,'asesor',us) : null;
+  const tP = m.tecnicoNombre ? panPersona(m.tecnicoNombre,'tecnico',us) : null;
+  const fRes = resuelto ? (iso2d(m.fechaResolucion) || (est==='No procede' ? iso2d(m.fechaEntrega) : '')) : '';
+  const fEnt = m.entregado ? iso2d(m.fechaEntrega) : '';
+  let tecUid = (tP && tP.uid) ? tP.uid : null;
+  if(opt.respaldo) tecUid = (resuelto && m.entregado) ? 'importado' : null;
+  return {
+    folio:m.folio||'', tipo:/serv/i.test(m.tipo||'')?'Servicio técnico':'Garantía',
+    cliente:m.cliente||'', telefono:m.telefono||'', serial:m.serial||'', equipo:m.equipo||'', falla:m.falla||'',
+    marca: PAN_MARCA_ID[m.marca] || String(m.marca||'').toLowerCase().replace(/\s+/g,''),
+    sucursal:m.sucursal||'', asesor:m.asesorNombre||'', asesorUid:(aP && aP.uid)||'',
+    tecnico:m.tecnicoNombre||'', tecnicoUid:tecUid,
+    estado:PAN_EST[est], estadoMesa:est,
+    fechaRecibido:m.fecha||'', fechaResuelto:fRes, fechaEntregado:fEnt,
+    observaciones:m.observacion||'', incidencias:Array.isArray(m.incidencias)?m.incidencias:[],
+    responsableIncidencia:m.responsableIncidencia||'', reincidenciaDe:m.reincidenciaDe||'', evidencia:m.evidencia||'',
+    historial:Array.isArray(m.historial)?m.historial:[], fechaAsignacion:m.fechaAsignacion||null,
+    creadoPor:m.creadoPor||'', creadoEn:m.creadoEn||nowIso(),
+    tiempoResolucionHoras: typeof m.tiempoResolucionHoras==='number' ? m.tiempoResolucionHoras : null,
+    tiempoResolucionHorasFecha: fRes
+  };
+}
+/* Cambios hechos en la Mesa -> campos del documento del panel (solo lo que cambió). */
+function panToPatch(p, base, us){
+  const o = {}, has = k=>Object.prototype.hasOwnProperty.call(p,k);
+  if(has('estado')){ o.estadoMesa = p.estado; o.estado = PAN_EST[p.estado] || 'Pendiente'; }
+  if(has('fechaResolucion')) o.fechaResuelto = iso2d(p.fechaResolucion);
+  if(has('tiempoResolucionHoras')){
+    o.tiempoResolucionHoras = (typeof p.tiempoResolucionHoras==='number') ? p.tiempoResolucionHoras : null;
+    o.tiempoResolucionHorasFecha = has('fechaResolucion') ? iso2d(p.fechaResolucion) : ((base && base.fechaResuelto) || '');
+  }
+  if(has('observacion')) o.observaciones = p.observacion || '';
+  if(has('entregado') || has('fechaEntrega')){
+    const ent = has('entregado') ? !!p.entregado : !!(base && base.fechaEntregado);
+    o.fechaEntregado = ent ? (iso2d(p.fechaEntrega) || (base && base.fechaEntregado) || iso2d(nowIso())) : '';
+  }
+  if(has('tipo')) o.tipo = /serv/i.test(p.tipo||'') ? 'Servicio técnico' : 'Garantía';
+  if(has('tecnicoId') || has('tecnicoNombre')){
+    const nom = p.tecnicoNombre || '';
+    o.tecnico = nom;
+    let uidT = null;
+    if(p.tecnicoId && us.some(u=>u.id===p.tecnicoId)) uidT = p.tecnicoId;
+    else if(nom){ const per = panPersona(nom,'tecnico',us); if(per && per.uid) uidT = per.uid; }
+    o.tecnicoUid = uidT;
+  }
+  if(has('asesorNombre') || has('asesorId')){
+    const nom = p.asesorNombre || '';
+    o.asesor = nom;
+    let uidA = '';
+    if(p.asesorId && us.some(u=>u.id===p.asesorId)) uidA = p.asesorId;
+    else if(nom){ const per = panPersona(nom,'asesor',us); if(per && per.uid) uidA = per.uid; }
+    o.asesorUid = uidA;
+  }
+  if(has('fechaAsignacion')) o.fechaAsignacion = p.fechaAsignacion || null;
+  if(has('marca')) o.marca = PAN_MARCA_ID[p.marca] || String(p.marca||'').toLowerCase().replace(/\s+/g,'');
+  ['sucursal','cliente','serial','equipo','falla','telefono','evidencia','responsableIncidencia','reincidenciaDe'].forEach(k=>{ if(has(k)) o[k] = p[k] || ''; });
+  if(has('incidencias')) o.incidencias = Array.isArray(p.incidencias) ? p.incidencias : [];
+  if(has('historial')) o.historial = Array.isArray(p.historial) ? p.historial : [];
+  return o;
+}
+function panCol(){ return PanelStore._db.collection('casos'); }
+function panNoWrite(){
+  if(!canWrite()){ toast('Solo lectura: inicia sesión como editor para modificar la Mesa de Garantías','🔒'); throw new Error('solo-lectura'); }
+  if(!PanelStore._db){ toast('No hay conexión con la nube en este momento','⚠️'); throw new Error('sin-nube'); }
+}
+
 const Store = {
-  backend: null,
-  db: null,
+  backend: 'panel',
   config: null,
   cases: [],
   ready: false,
   listeners: {config:[], cases:[]},
-  configRef: null, casesRef: null,
 
-  async init(){
-    // 1) Firebase (backend externo, sin cuenta de Claude — usado cuando la app
-    //    se aloja fuera de Claude, ej. Netlify/Firebase Hosting).
-    try{
-      if(typeof firebase !== 'undefined' && typeof FIREBASE_CONFIG === 'object' && FIREBASE_CONFIG && FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.apiKey.indexOf('TU_') !== 0){
-        const gtsApp = (firebase.apps||[]).find(a=>a.name==='gts') || firebase.initializeApp(FIREBASE_CONFIG, 'gts');
-        this.db = gtsApp.firestore();
-        this.backend = 'firebase';
-      }
-    }catch(e){ this.db = null; console.error('No se pudo inicializar Firebase:', e); }
+  async init(){ this.refresh(true); this.ready = true; },
 
-    // 2) Capacidad "db" de Claude (cuando la app corre publicada como Artifact).
-    if(!this.db){
-      try{
-        if(window.claude && typeof window.claude.use === 'function'){
-          const cap = await window.claude.use('db');
-          if(cap){ this.db = cap; this.backend = 'db'; }
-        }
-      }catch(e){ this.db = null; }
-    }
-
-    if(this.db){
-      this.configRef = this.db.doc('config/settings');
-      this.casesRef = this.db.collection('cases');
-      await this._bootstrapRemote();
-      this._watchRemote();
-    } else {
-      // 3) Respaldo local por navegador (sin backend compartido disponible).
-      this.backend = 'local';
-      this._loadLocal();
-    }
-    this.ready = true;
+  /* Recalcula todo a partir de lo que hay en el Panel de Asesores (se llama solo cada vez que
+     llega un cambio de "casos" o de "usuarios"). */
+  refresh(silent){
+    const us = panUsuarios();
+    this.config = panBuildConfig();
+    this.cases = panCasos().map(c=>panToMesa(c, us)).sort((a,b)=>String(b.creadoEn).localeCompare(String(a.creadoEn)));
+    if(!silent){ this._notify('config'); this._notify('cases'); }
   },
 
-  async _bootstrapRemote(){
-    const snap = await this.configRef.get();
-    if(snap.exists){ return; }
-    if(this.backend==='db'){
-      // intenta reclamar el sembrado inicial para evitar duplicados entre viewers (solo
-      // disponible en la capacidad "db" de Claude; Firestore no tiene este primitivo,
-      // así que ahí solo corre la comprobación de "¿ya existe config?" de abajo).
-      let acquired = false;
-      try{
-        const lock = this.db.doc('meta/seed');
-        const res = await lock.acquire({holder: 'seed-'+uid(''), ttlMs: 20000});
-        acquired = res.acquired;
-      }catch(e){ acquired = true; }
-      if(!acquired) return;
-    }
-    const again = await this.configRef.get();
-    if(again.exists) return;
-    const cfg = defaultConfig();
-    await this.configRef.set(cfg);
-    // Nota: no se generan garantías de ejemplo — el sistema arranca sin ningún caso registrado.
-  },
-
-  isRemote(){ return this.backend==='db' || this.backend==='firebase'; },
-
-  _watchRemote(){
-    this.configRef.onSnapshot(snap=>{
-      this.config = snap.exists ? snap.data() : defaultConfig();
-      this._notify('config');
-    }, ()=>{});
-    this.casesRef.orderBy('creadoEn','desc').limit(900).onSnapshot(qsnap=>{
-      this.cases = qsnap.docs.map(d=>Object.assign({id:d.id}, d.data()));
-      this._notify('cases');
-    }, ()=>{});
-  },
-
-  _loadLocal(){
-    let cfg = null, cases = null;
-    try{ cfg = JSON.parse(localStorage.getItem('gts_config')||'null'); }catch(e){}
-    try{ cases = JSON.parse(localStorage.getItem('gts_cases')||'null'); }catch(e){}
-    if(!cfg){ cfg = defaultConfig(); }
-    if(!cases){ cases = []; }
-    this.config = cfg; this.cases = cases;
-    this._saveLocal();
-  },
-  _saveLocal(){
-    try{
-      localStorage.setItem('gts_config', JSON.stringify(this.config));
-      localStorage.setItem('gts_cases', JSON.stringify(this.cases));
-    }catch(e){}
-  },
+  isRemote(){ return !!(EV && EV.on && PanelStore._soyEditor); },
 
   onConfig(cb){ this.listeners.config.push(cb); if(this.config) cb(this.config); return ()=>{ this.listeners.config = this.listeners.config.filter(f=>f!==cb); }; },
   onCases(cb){ this.listeners.cases.push(cb); if(this.cases) cb(this.cases); return ()=>{ this.listeners.cases = this.listeners.cases.filter(f=>f!==cb); }; },
@@ -10144,92 +10237,88 @@ const Store = {
   getConfig(){ return this.config; },
   getCases(){ return this.cases||[]; },
 
+  /* Las personas y sucursales salen de "Equipo" y "Configuración" del CRG; aquí solo se
+     guardan los tipos de incidencia. */
   async saveConfig(newConfig){
     if(!canWrite()){ toast('Solo lectura: inicia sesión como editor para modificar la Mesa de Garantías','🔒'); throw new Error('solo-lectura'); }
-    
-    newConfig.updatedAt = nowIso();
-    if(this.isRemote()){
-      await this.configRef.set(newConfig);
-    } else {
-      this.config = newConfig;
-      this._saveLocal();
-      this._notify('config');
-    }
+    if(Array.isArray(newConfig && newConfig.incidentTypes)) PanelStore.set(PAN_INC_KEY, newConfig.incidentTypes);
+    this.config = Object.assign({}, this.config, {incidentTypes: (newConfig.incidentTypes||[]).slice()});
+    this._notify('config');
   },
 
   async createCase(data){
-    if(!canWrite()){ toast('Solo lectura: inicia sesión como editor para modificar la Mesa de Garantías','🔒'); throw new Error('solo-lectura'); }
-    
-    const payload = Object.assign({}, data, {creadoEn: nowIso()});
-    if(this.isRemote()){
-      const ref = await this.casesRef.add(payload);
-      return ref.id;
-    } else {
-      const id = uid('c');
-      this.cases = [Object.assign({id}, payload), ...this.cases];
-      this._saveLocal();
-      this._notify('cases');
-      return id;
-    }
+    panNoWrite();
+    const doc = panToDoc(data, panUsuarios());
+    doc.origen = 'mesa-crg';
+    doc.creadoAt = firebase.firestore.FieldValue.serverTimestamp();
+    doc.creadoMs = Date.now();
+    const ref = await panCol().add(doc);
+    return ref.id;
   },
 
-  async updateCase(id, patchWithHistorial){
-    if(!canWrite()){ toast('Solo lectura: inicia sesión como editor para modificar la Mesa de Garantías','🔒'); throw new Error('solo-lectura'); }
-    
-    if(this.isRemote()){
-      await this.casesRef.doc(id).update(patchWithHistorial);
-    } else {
-      this.cases = this.cases.map(c=> c.id===id ? Object.assign({}, c, patchWithHistorial) : c);
-      this._saveLocal();
-      this._notify('cases');
-    }
+  async updateCase(id, patch){
+    panNoWrite();
+    const base = panCasos().filter(c=>c.id===id)[0] || null;
+    const upd = panToPatch(patch, base, panUsuarios());
+    upd.actualizadoAt = firebase.firestore.FieldValue.serverTimestamp();
+    await panCol().doc(id).update(upd);
   },
 
   async deleteCase(id){
-    if(!canWrite()){ toast('Solo lectura: inicia sesión como editor para modificar la Mesa de Garantías','🔒'); throw new Error('solo-lectura'); }
-    
-    if(this.isRemote()){
-      await this.casesRef.doc(id).delete();
-    } else {
-      this.cases = this.cases.filter(c=>c.id!==id);
-      this._saveLocal();
-      this._notify('cases');
-    }
+    panNoWrite();
+    await panCol().doc(id).delete();
   },
 
+  /* Se desactivó a propósito: aquí los casos son los reales de los asesores. */
   async deleteAllCases(){
-    if(!canWrite()){ toast('Solo lectura: inicia sesión como editor para modificar la Mesa de Garantías','🔒'); throw new Error('solo-lectura'); }
-    
-    if(this.isRemote()){
-      const snap = await this.casesRef.get();
-      for(const d of snap.docs){ try{ await this.casesRef.doc(d.id).delete(); }catch(e){} }
-    } else {
-      this.cases = [];
-      this._saveLocal();
-      this._notify('cases');
-    }
+    toast('Borrar todos los casos está desactivado: son los casos reales de los asesores','🔒');
+    throw new Error('desactivado');
   },
 
   exportBackup(){
     return {version:1, exportedAt: nowIso(), config: this.config, cases: this.cases};
   },
 
+  /* Respaldo de la Mesa vieja: agrega los casos que falten y completa los que ya están (por folio)
+     con lo que solo tenía la Mesa. No borra nada. */
   async importBackup(obj){
-    if(!canWrite()){ toast('Solo lectura: inicia sesión como editor para modificar la Mesa de Garantías','🔒'); throw new Error('solo-lectura'); }
-    
-    if(!obj || !obj.config || !Array.isArray(obj.cases)) throw new Error('Archivo inválido');
-    await this.saveConfig(obj.config);
-    await this.deleteAllCases();
-    if(this.isRemote()){
-      for(const c of obj.cases){
-        const copy = Object.assign({}, c); delete copy.id;
-        await this.casesRef.add(copy);
+    panNoWrite();
+    if(!obj || !Array.isArray(obj.cases)) throw new Error('Archivo inválido');
+    const us = panUsuarios();
+    const existentes = new Map();
+    panCasos().forEach(c=>{ if(c.folio) existentes.set(c.folio, c); });
+    /* Nombres de la lista de la Mesa vieja (con tildes y bien escritos): "DANIELIS" o "Danielis
+       Jimenex" pasan a "Danielis Jiménez". El asesor es quien escribieron como vendedor. */
+    const roster = [].concat((obj.config && obj.config.advisors) || [], (obj.config && obj.config.technicians) || []).map(x=>x && x.name).filter(Boolean);
+    const canon = nombre=>{
+      const n = pnorm(nombre); if(!n) return nombre || '';
+      let m = roster.find(r=>pnorm(r)===n);
+      if(!m){ const t = n.split(' ')[0]; const igual = roster.filter(r=>pnorm(r).split(' ')[0]===t); if(igual.length===1) m = igual[0]; }
+      return m || nombre;
+    };
+    let nuevos = 0, completados = 0;
+    for(const b0 of obj.cases){
+      const b = Object.assign({}, b0, {asesorNombre:canon(b0.asesorNombre), tecnicoNombre:canon(b0.tecnicoNombre)});
+      const doc = panToDoc(b, us, {respaldo:true});
+      const ex = b.folio ? existentes.get(b.folio) : null;
+      if(ex){
+        const upd = {
+          estadoMesa:doc.estadoMesa, incidencias:doc.incidencias, responsableIncidencia:doc.responsableIncidencia,
+          reincidenciaDe:doc.reincidenciaDe, evidencia:doc.evidencia, historial:doc.historial,
+          fechaAsignacion:doc.fechaAsignacion, creadoEn:doc.creadoEn,
+          tiempoResolucionHoras:doc.tiempoResolucionHoras, tiempoResolucionHorasFecha:ex.fechaResuelto||''
+        };
+        if(ex.importado && !ex.actualizadoAt){ upd.observaciones = doc.observaciones; upd.asesor = doc.asesor; upd.asesorUid = doc.asesorUid; }
+        await panCol().doc(ex.id).update(upd);
+        completados++;
+      } else {
+        doc.importado = true; doc.origen = 'mesa-vieja';
+        doc.creadoAt = firebase.firestore.FieldValue.serverTimestamp(); doc.creadoMs = Date.now();
+        await panCol().add(doc);
+        nuevos++;
       }
-    } else {
-      this.cases = obj.cases.map(c=>Object.assign({}, c, {id: c.id||uid('c')}));
-      this._saveLocal();
-      this._notify('cases');
     }
+    return {nuevos, completados};
   }
 };
 
@@ -10530,8 +10619,8 @@ function buildFrame(){
 
 function renderAdminShell(){
   const storageNote = Store.isRemote()
-    ? '<div class="storage-note"><span class="dot"></span>Sincronizado con la Mesa de Garantías — todos ven los mismos datos</div>'
-    : '<div class="storage-note local"><span class="dot"></span>Modo local — no se pudo conectar con la Mesa de Garantías</div>';
+    ? '<div class="storage-note"><span class="dot"></span>Alimentada por el Panel de Asesores — lo que ellos y el técnico registran aparece aquí</div>'
+    : '<div class="storage-note local"><span class="dot"></span>Sin conexión con los casos — inicia sesión como editor para verlos</div>';
   return `
   <div class="gts-top">
     <div class="searchbar"><span>🔎</span><input type="search" id="global-search" placeholder="Buscar cliente, serial, ID, asesor, técnico…" value="${esc(App.filters.q)}"></div>
@@ -11001,61 +11090,14 @@ function renderCasosView(allCases, cfg){
    CONFIGURACIÓN
 ===================================================================== */
 function renderConfigView(cfg){
-  function list(items, kind){
-    return items.map(it=>`
-      <div class="cfg-row ${it.active?'':'inactive'}">
-        <span class="nm">${esc(it.name)}${it.brand?' <span class="tag">· '+BRAND_LABEL[it.brand]+'</span>':''}</span>
-        <span class="tag">${it.active?'Activo':'Inactivo'}</span>
-        <button class="btn ghost sm" data-toggle="${kind}:${it.id}">${it.active?'Desactivar':'Activar'}</button>
-        <button class="btn danger sm" data-remove="${kind}:${it.id}">Eliminar</button>
-      </div>`).join('') || '<div class="hint">Sin registros.</div>';
-  }
   return `
-  <div class="grid2">
-    <div class="panel">
-      <div class="panel-title">🧑‍🔧 Técnicos</div>
-      <div class="cfg-list">${list(cfg.technicians,'tech')}</div>
-      <div class="addrow"><input type="text" id="new-tech" placeholder="Nombre del técnico"><button class="btn primary sm" id="add-tech">Agregar</button></div>
-    </div>
-    <div class="panel">
-      <div class="panel-title">🎧 Asesores</div>
-      <div class="cfg-list">${list(cfg.advisors,'adv')}</div>
-      <div class="addrow"><input type="text" id="new-adv" placeholder="Nombre del asesor"><button class="btn primary sm" id="add-adv">Agregar</button></div>
-    </div>
-  </div>
   <div class="block">
     <div class="panel">
-      <div class="panel-title">🏬 Sucursales</div>
-      <div class="cfg-list">${list(cfg.branches,'branch')}</div>
-      <div class="addrow">
-        <input type="text" id="new-branch" placeholder="Nombre de la sucursal">
-        <select id="new-branch-brand">${BRANDS.map(b=>'<option value="'+b+'">'+BRAND_LABEL[b]+'</option>').join('')}</select>
-        <button class="btn primary sm" id="add-branch">Agregar</button>
-      </div>
-    </div>
-  </div>
-  <div class="block">
-    <div class="panel">
-      <div class="panel-title">🏷️ Marcas</div>
-      <div class="cfg-list">${BRANDS.map(b=>'<div class="cfg-row"><span class="nm">'+BRAND_LABEL[b]+'</span><span class="tag">Fija</span></div>').join('')}</div>
-      <div class="hint">Las tres marcas de la operación están fijas por diseño del sistema.</div>
-    </div>
-  </div>
-  <div class="block">
-    <div class="seccion-titulo">Acceso de administrador<span class="linea"></span></div>
-    <div class="grid2">
-      <div class="panel">
-        <div class="panel-title">🔐 Administradores autorizados</div>
-        <div class="panel-sub">Solo estos nombres pueden iniciar sesión como administrador, junto con la clave.</div>
-        <div class="cfg-list">${list(cfg.administrators||[], 'admin')}</div>
-        <div class="addrow"><input type="text" id="new-admin" placeholder="Nombre del nuevo administrador"><button class="btn primary sm" id="add-admin">Agregar</button></div>
-      </div>
-      <div class="panel">
-        <div class="panel-title">🔑 Clave de administrador</div>
-        <div class="panel-sub">Se usa junto con el nombre para entrar al panel. Compártela solo con quien deba tener acceso administrativo.</div>
-        <label class="field">Nueva clave<input type="text" id="new-adminpass" placeholder="Mínimo 4 caracteres"></label>
-        <label class="field" style="margin-top:8px;">Repetir clave<input type="text" id="new-adminpass2" placeholder="Repite la clave"></label>
-        <button class="btn primary sm" id="btn-change-adminpass" style="margin-top:10px;">Actualizar clave</button>
+      <div class="panel-title">👥 Personas y sucursales</div>
+      <div class="panel-sub">Los asesores, el técnico y las sucursales salen de las pestañas <b>Equipo</b> y <b>Configuración</b> del CRG. Si agregas o desactivas a alguien allá, aquí se actualiza solo. Los casos viejos conservan el nombre de quien los atendió.</div>
+      <div class="cfg-list">
+        ${cfg.technicians.map(t=>'<div class="cfg-row '+(t.active?'':'inactive')+'"><span class="nm">🧑‍🔧 '+esc(t.name)+'</span><span class="tag">'+(t.active?'Técnico activo':'Técnico (histórico)')+'</span></div>').join('')}
+        ${cfg.advisors.map(a=>'<div class="cfg-row '+(a.active?'':'inactive')+'"><span class="nm">🎧 '+esc(a.name)+'</span><span class="tag">'+(a.active?'Asesor activo':'Asesor (histórico)')+'</span></div>').join('')}
       </div>
     </div>
   </div>
@@ -11081,19 +11123,12 @@ function renderConfigView(cfg){
     </div>
   </div>
   <div class="block">
-    <div class="panel" style="border-color:rgba(208,59,59,.35);">
-      <div class="panel-title">🗑️ Reiniciar casos</div>
-      <div class="panel-sub">Elimina todos los casos registrados para comenzar desde cero. La configuración de técnicos, asesores, sucursales y administradores se conserva.</div>
-      <button class="btn danger sm" id="btn-wipe-demo">Eliminar todos los casos</button>
-    </div>
-  </div>
-  <div class="block">
     <div class="panel">
       <div class="panel-title">💾 Respaldo</div>
-      <div class="panel-sub">Exporta toda la información (configuración + casos) como respaldo, o impórtala para restaurar un estado anterior.</div>
+      <div class="panel-sub">Exporta todos los casos como respaldo. También puedes importar un respaldo de la Mesa vieja: agrega los casos que falten y completa los que ya están (incidencias, historial, estados), sin borrar nada.</div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn ghost sm" id="btn-backup-export">⬇ Exportar respaldo JSON</button>
-        <label class="btn ghost sm" style="cursor:pointer;">⬆ Importar respaldo<input type="file" id="btn-backup-import" accept="application/json" hidden></label>
+        <label class="btn ghost sm" style="cursor:pointer;">⬆ Importar respaldo de la Mesa vieja<input type="file" id="btn-backup-import" accept="application/json" hidden></label>
       </div>
     </div>
   </div>
@@ -11246,9 +11281,9 @@ function wireCurrentView(cases, cfg){
     try{
       const text = await file.text();
       const obj = JSON.parse(text);
-      if(!confirm('Esto reemplazará toda la configuración y los casos actuales. ¿Continuar?')) return;
-      await Store.importBackup(obj);
-      toast('Respaldo importado correctamente');
+      if(!confirm('Esto agregará los casos que falten y completará los que ya están (incidencias, historial). No borra nada. ¿Continuar?')) return;
+      const r = await Store.importBackup(obj);
+      toast('Respaldo importado: '+r.nuevos+' nuevos, '+r.completados+' completados');
     }catch(err){ toast('No se pudo importar el archivo: '+err.message, '⚠️'); }
   });
 }
@@ -11993,18 +12028,17 @@ async function boot(){
   render();
 }
 function mount(){
-  /* La Mesa vieja ya no se usa: esta pestaña NO se conecta a su base de datos. Muestra solo los
-     casos que llegan del Panel de Asesores (y los que se registren aquí a mano). */
-  const view = document.getElementById('view-garantias');
-  if(!view) return;
-  if(!document.getElementById('gm-root')){
-    view.innerHTML = '<div id="gm-root"></div>';
-    GM.built = false;
+  App.identity = {role:'admin', name: currentUserName(), adminId:'panel'};
+  try{ if(!EV.on) evIniciar(); }catch(e){}
+  if(!booted){ boot(); } else { try{ Store.refresh(true); }catch(e){} ensureRoots(); render(); }
+  /* Si la sesión todavía no estaba lista al abrir la pestaña, reintenta hasta que conecte. */
+  if(!mount._t){
+    mount._t = setInterval(function(){
+      try{ if(isActiveView() && !EV.on){ evIniciar(); if(EV.on) Store.refresh(); } }catch(e){}
+    }, 2000);
   }
-  document.getElementById('gm-root').style.display = '';
-  renderGM();
 }
-return { mount: mount };
+return { mount: mount, refresh: function(){ try{ Store.refresh(); }catch(e){} } };
 
 })(Store, (typeof REPV2_CHARTJS_SRC==="string" ? REPV2_CHARTJS_SRC : ""));
 
