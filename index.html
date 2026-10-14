@@ -6995,13 +6995,124 @@ function renderReportesView(){
       '<p style="font-size:12.5px;color:var(--text-mute);max-width:62ch;margin:-4px 0 14px;">Elige qué quieres analizar — tipo de reporte, marca(s), período y filtros — y arma un reporte comercial completo: resumen general, tiendas, asesores, productos, canales, leads, histórico y detalle.</p>' +
       '<button class="btn btn-primary" id="repIniciar"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Generar reporte</button>' +
     '</div>' +
+    vxCardHTML() +
     '<div id="repConfiguradorWrap"></div>' +
     '<div id="repResultadoWrap"></div>';
+  vxWire();
   document.getElementById('repIniciar').addEventListener('click', function(){
     document.getElementById('repIntroCard').style.display = 'none';
     document.getElementById('repResultadoWrap').innerHTML = '';
     drawConfigurador();
     document.getElementById('repConfiguradorWrap').scrollIntoView({behavior:'smooth', block:'start'});
+  });
+}
+
+/* ============ VENTAS EN EXCEL (por fechas) ============
+   Descarga solo las ventas guardadas en las bases de las marcas, del rango de fechas y la marca
+   que elijas. No modifica ningún dato. El lector de Excel se carga solo al pulsar el botón;
+   si no hay internet, se descarga un CSV que Excel también abre. */
+var VX_XLSX_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+function vxCargarXLSX(){
+  return new Promise(function(res, rej){
+    if(window.XLSX) return res(window.XLSX);
+    var s = document.createElement('script');
+    s.src = VX_XLSX_CDN;
+    s.onload = function(){ window.XLSX ? res(window.XLSX) : rej(new Error('xlsx')); };
+    s.onerror = function(){ rej(new Error('xlsx')); };
+    document.head.appendChild(s);
+  });
+}
+function vxCardHTML(){
+  var mes = repResolverPeriodo('mes_actual');
+  return '<div class="card" id="vxCard" style="margin-bottom:16px;">' +
+    '<div class="card-head"><h3>Ventas en Excel</h3></div>' +
+    '<p style="font-size:12.5px;color:var(--text-mute);max-width:62ch;margin:-4px 0 14px;">Descarga solo las ventas, en un archivo de Excel, de las fechas que elijas. Puedes sacar todas las marcas juntas o una sola.</p>' +
+    '<div class="filterbar">' +
+      '<div class="field"><label>Desde</label><input type="date" id="vxDesde" value="'+mes.desde+'"></div>' +
+      '<div class="field"><label>Hasta</label><input type="date" id="vxHasta" value="'+mes.hasta+'"></div>' +
+      '<div class="field"><label>Marca</label><select id="vxMarca"><option value="">Todas las marcas</option>' +
+        BRANDS.map(function(b){ return '<option value="'+b.id+'">'+b.name+'</option>'; }).join('') + '</select></div>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">' +
+      '<button type="button" class="btn btn-ghost" data-vxp="mes_actual">Este mes</button>' +
+      '<button type="button" class="btn btn-ghost" data-vxp="mes_anterior">Mes anterior</button>' +
+      '<button type="button" class="btn btn-ghost" data-vxp="ult7">Últimos 7 días</button>' +
+      '<button type="button" class="btn btn-ghost" data-vxp="ult30">Últimos 30 días</button>' +
+    '</div>' +
+    '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;">' +
+      '<button type="button" class="btn btn-primary" id="vxDescargar">Descargar Excel de ventas</button>' +
+      '<span id="vxMsg" style="font-size:12px;color:var(--text-mute);"></span>' +
+    '</div>' +
+  '</div>';
+}
+function vxWire(){
+  var card = document.getElementById('vxCard'); if(!card) return;
+  Array.prototype.forEach.call(card.querySelectorAll('[data-vxp]'), function(b){
+    b.addEventListener('click', function(){
+      var p = repResolverPeriodo(b.getAttribute('data-vxp'));
+      document.getElementById('vxDesde').value = p.desde;
+      document.getElementById('vxHasta').value = p.hasta;
+    });
+  });
+  document.getElementById('vxDescargar').addEventListener('click', vxDescargar);
+}
+function vxFilas(marcaId, desde, hasta){
+  var ids = marcaId ? [marcaId] : BRANDS.map(function(b){ return b.id; });
+  var lista = repFiltrar(repVentasCrudas(ids), desde, hasta, {});
+  lista.sort(function(a, b){
+    return String(a.fecha||'').localeCompare(String(b.fecha||'')) ||
+      String(a._marcaNombre||'').localeCompare(String(b._marcaNombre||'')) ||
+      String(a.notaFina||'').localeCompare(String(b.notaFina||''), undefined, {numeric:true});
+  });
+  return lista;
+}
+function vxSerial(iso){
+  var m = String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return null;
+  return (Date.UTC(+m[1], +m[2]-1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000;
+}
+var VX_COLS = ['Fecha','Marca','Sucursal','Asesor','N° nota fina','Producto','Cantidad','Precio','Total','Canal','Observaciones'];
+function vxDescargar(){
+  var msg = document.getElementById('vxMsg');
+  var d = document.getElementById('vxDesde').value, h = document.getElementById('vxHasta').value;
+  var marcaId = document.getElementById('vxMarca').value;
+  if(!d || !h){ msg.textContent = 'Elige las dos fechas: desde y hasta.'; return; }
+  if(d > h){ var t = d; d = h; h = t; }
+  var lista = vxFilas(marcaId, d, h);
+  if(!lista.length){ msg.textContent = 'No hay ventas entre esas fechas.'; return; }
+  var marcaTag = marcaId ? '_'+marcaId : '';
+  var nombre = 'ventas_'+d+'_a_'+h+marcaTag;
+  var filas = lista.map(function(v){
+    return [v.fecha||'', v._marcaNombre||'', v.sucursal||'', v.asesor||'', v.notaFina==null?'':String(v.notaFina), v.producto||'',
+      Number(v.cantidad)||1, Number(v.precio)||0, Number(v.total)||0, v.canal||'', v.observaciones||''];
+  });
+  msg.textContent = 'Preparando…';
+  vxCargarXLSX().then(function(X){
+    var aoa = [VX_COLS].concat(filas.map(function(r){ var c = r.slice(); c[0] = ''; return c; }));
+    aoa.push(['TOTAL','','','','','','','','','','']);
+    var ws = X.utils.aoa_to_sheet(aoa);
+    var n = filas.length, tot = 0, uni = 0;
+    for(var i = 0; i < n; i++){
+      var r = i + 2, f = filas[i], ser = vxSerial(f[0]);
+      ws['A'+r] = ser==null ? {t:'s', v:String(f[0])} : {t:'n', v:ser, z:'dd/mm/yyyy'};
+      ws['G'+r].z = '0'; ws['H'+r].z = '#,##0.00'; ws['I'+r].z = '#,##0.00';
+      tot += f[8]; uni += f[6];
+    }
+    var rt = n + 2;
+    ws['G'+rt] = {t:'n', v:uni, f:'SUM(G2:G'+(n+1)+')', z:'0'};
+    ws['I'+rt] = {t:'n', v:Math.round(tot*100)/100, f:'SUM(I2:I'+(n+1)+')', z:'#,##0.00'};
+    ws['!ref'] = 'A1:K'+rt;
+    ws['!autofilter'] = {ref:'A1:K'+(n+1)};
+    ws['!cols'] = [{wch:12},{wch:14},{wch:20},{wch:22},{wch:13},{wch:38},{wch:9},{wch:12},{wch:12},{wch:12},{wch:36}];
+    var wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, ws, 'Ventas');
+    X.writeFile(wb, nombre+'.xlsx');
+    msg.textContent = 'Listo: '+n+' venta'+(n===1?'':'s')+', total $'+tot.toLocaleString('es-VE',{minimumFractionDigits:2,maximumFractionDigits:2})+'.';
+  }).catch(function(){
+    function q(x){ return '"'+String(x==null?'':x).replace(/"/g,'""')+'"'; }
+    var csv = [VX_COLS].concat(filas).map(function(r){ return r.map(q).join(';'); }).join('\r\n');
+    descargarArchivo(nombre+'.csv', '﻿'+csv, 'text/csv;charset=utf-8');
+    msg.textContent = 'No pude cargar el lector de Excel (¿sin internet?). Descargué un CSV con las mismas ventas; Excel lo abre igual.';
   });
 }
 
