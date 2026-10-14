@@ -9297,10 +9297,10 @@ function renderGM(){
     GM.built=true;
     root.innerHTML=
       '<div id="gmMsg"></div>'+
+      '<p style="font-size:11.5px;color:var(--text-mute);margin:0 0 12px;">Estos casos los registran los asesores en el Panel de Asesores y el técnico los va actualizando allí. Aquí se ven todos juntos, de las 3 marcas.</p>'+
       '<div class="filterbar" style="margin-bottom:14px;">'+
         '<input type="file" id="gm-file" accept=".html,text/html" style="display:none;">'+
         '<button class="btn btn-primary" data-gm="nueva"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Nueva garantía</button>'+
-        '<button class="btn btn-ghost" data-gm="importar" title="Importa el HTML que exportas desde la Mesa de Garantías vieja">Importar de la Mesa vieja</button>'+
         '<button class="btn btn-ghost" data-gm="reporte" style="margin-left:auto;">Generar reporte</button>'+
         '<button class="btn btn-ghost" data-gm="informe">Informe rápido</button>'+
       '</div>'+
@@ -9403,7 +9403,7 @@ function gmLista(){
     return '<tr><td>'+evEsc(g.fecha)+'</td><td class="mono" style="font-size:11px;">'+(g.folio?(g.revisar?'⚠ ':'')+evEsc(g.folio):mut)+'</td><td>'+evEsc(g._mn)+'</td><td>'+tipoCasoBadgeGarantia(g)+'</td><td>'+evEsc(g.sucursal)+'</td><td>'+(g.asesor?evEsc(g.asesor):mut)+'</td><td>'+evEsc(g.producto)+'</td><td>'+evEsc(g.falla)+'</td><td>'+(g.tecnico?evEsc(g.tecnico):mut)+'</td><td>'+estadoBadgeGarantia(g)+'</td>'+
       '<td style="white-space:normal;min-width:180px;">'+(g.solucion?evEsc(g.solucion):mut)+(ex.length?'<div style="font-size:10.5px;color:var(--text-mute);margin-top:3px;">'+ex.map(evEsc).join(' · ')+'</div>':'')+'</td>'+
       '<td style="white-space:nowrap;text-align:right;">'+cb+ent+'<button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;" data-gm="editar" data-m="'+g._m+'" data-id="'+g.id+'">Editar</button> <button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;color:var(--negative);" data-gm="borrar" data-m="'+g._m+'" data-id="'+g.id+'">Eliminar</button></td></tr>';
-  }).join('') || '<tr class="table-empty"><td colspan="12">'+(todas.length?'No hay casos que coincidan con estos filtros.':'Aún no hay casos. Los del Panel de Asesores llegan solos; los de la Mesa vieja los traes con “Importar de la Mesa vieja”.')+'</td></tr>';
+  }).join('') || '<tr class="table-empty"><td colspan="12">'+(todas.length?'No hay casos que coincidan con estos filtros.':'Aún no hay casos. Los que registren los asesores en el Panel de Asesores llegan solos.')+'</td></tr>';
 }
 
 /* ---- Generador de reportes de garantías: eliges de dónde salen los datos (marcas, origen, período,
@@ -11993,8 +11993,16 @@ async function boot(){
   render();
 }
 function mount(){
-  App.identity = {role:'admin', name: currentUserName(), adminId:'panel'};
-  if(!booted){ boot(); } else { ensureRoots(); render(); }
+  /* La Mesa vieja ya no se usa: esta pestaña NO se conecta a su base de datos. Muestra solo los
+     casos que llegan del Panel de Asesores (y los que se registren aquí a mano). */
+  const view = document.getElementById('view-garantias');
+  if(!view) return;
+  if(!document.getElementById('gm-root')){
+    view.innerHTML = '<div id="gm-root"></div>';
+    GM.built = false;
+  }
+  document.getElementById('gm-root').style.display = '';
+  renderGM();
 }
 return { mount: mount };
 
