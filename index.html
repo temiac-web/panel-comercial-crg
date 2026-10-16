@@ -300,6 +300,7 @@ body.solo-lectura #sf-new,
 body.solo-lectura #rf-new,
 body.solo-lectura #cfgSucursalAdd,
 body.solo-lectura #cfgAsesorAdd,
+body.solo-lectura #cfgUnifBox,
 body.solo-lectura #cfgCanalAdd{display:none!important;}
 
 </style>
@@ -888,6 +889,13 @@ body.solo-lectura #cfgCanalAdd{display:none!important;}
               <p style="font-size:11px;color:var(--text-mute);margin-top:8px;">Usa "Externo" para un asesor de otra tienda/marca y "Socio" para un amigo de los socios — la venta sigue contando como venta de la tienda, solo queda identificado quién la hizo. El tipo se muestra junto a su nombre y puedes tocarlo para cambiarlo.</p>
             </div>
           </div>
+          <div id="cfgUnifBox" style="margin-top:18px;">
+            <div class="card-head" style="margin-bottom:8px;"><h3 style="font-size:13px;">Unificar nombres de asesores</h3></div>
+            <p style="font-size:11.5px;color:var(--text-mute);margin-bottom:10px;">Si una misma persona quedó escrita de varias formas (con abreviaciones, con la marca al final, sin tilde…), únela aquí. Sus ventas, garantías y registros pasan a un solo nombre en las 3 marcas, y desde entonces cualquier venta nueva con esa escritura se guarda sola con el nombre oficial.</p>
+            <button class="btn btn-ghost" id="cfgUnifAbrir">Revisar nombres repetidos</button>
+            <div id="cfgUnifPanel" style="margin-top:12px;"></div>
+          </div>
+
           <div style="margin-top:18px;">
             <div class="card-head" style="margin-bottom:8px;"><h3 style="font-size:13px;">Canales</h3></div>
             <p style="font-size:11.5px;color:var(--text-mute);margin-bottom:10px;">Puedes renombrar un canal para unificarlo con otro (ej. "LEADS" y "Leads" pasan a ser uno solo) — las ventas ya registradas se actualizan solas. Solo se puede eliminar un canal si no tiene ventas asociadas.</p>
@@ -1430,7 +1438,7 @@ Store.deleteAsesor = function(b, id){
   var list = Store.asesores(b);
   var a = list.find(function(x){return x.id===id;});
   if(!a) return {ok:false, reason:'noexiste'};
-  var enUso = Store.ventas(b).some(function(v){return v.asesor === a.nombre;});
+  var enUso = Store.ventas(b).some(function(v){return mismoAsesor(v.asesor, a.nombre);});
   if(enUso) return {ok:false, reason:'enuso'};
   Store.set(Store.k.asesores(b), list.filter(function(x){return x.id!==id;}));
   return {ok:true};
@@ -1523,6 +1531,7 @@ Store.ventaPorNotaFina = function(b, nota){
 };
 Store.addVenta = function(b, venta){
   var list = Store.ventas(b);
+  if(venta.asesor) venta.asesor = canonAsesor(venta.asesor);
   venta.id = uid('v');
   venta.creadoEn = new Date().toISOString();
   list.push(venta);
@@ -1533,6 +1542,7 @@ Store.updateVenta = function(b, id, data){
   var list = Store.ventas(b);
   var i = list.findIndex(function(x){return x.id===id;});
   if(i===-1) return false;
+  if(data && data.asesor) data = Object.assign({}, data, {asesor: canonAsesor(data.asesor)});
   list[i] = Object.assign({}, list[i], data);
   Store.set(Store.k.ventas(b), list);
   return true;
@@ -1810,6 +1820,178 @@ function esCanalLeads(canal){ return (canal||'').trim().toLowerCase()==='leads';
 function normNombre(s){
   return (s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase().replace(/\s+/g,' ');
 }
+
+/* ---- Unificación de nombres de asesores ----
+   Una misma persona puede quedar escrita de varias formas ("Danielis Jimenez", "Danielis
+   MegLaptop", "Danielis J."). Se guarda un mapa de alias (variante → nombre oficial) en
+   crg_alias_asesores; canonAsesor() lo aplica al guardar una venta y mismoAsesor() lo aplica al
+   comparar, para que las ventas le lleguen al asesor correcto sin importar cómo se escribió. */
+var ALIAS_KEY = 'crg_alias_asesores';
+var ASESOR_RUIDO = ['tekio','infot','megalaptop','meglaptop','mega','laptop'];
+function claveAsesor(s){
+  return normNombre(s).replace(/[^a-z0-9 ]/g,' ').split(' ').filter(function(t){ return t && ASESOR_RUIDO.indexOf(t)===-1; }).join(' ');
+}
+function aliasAsesores(){ var a = Store.get(ALIAS_KEY, {}); return (a && typeof a==='object') ? a : {}; }
+function canonAsesor(nombre){
+  var n = String(nombre==null ? '' : nombre).trim(); if(!n) return n;
+  var k = claveAsesor(n); if(!k) return n;
+  return aliasAsesores()[k] || n;
+}
+function mismoAsesor(a, b){
+  var x = claveAsesor(canonAsesor(a)), y = claveAsesor(canonAsesor(b));
+  return x !== '' && x === y;
+}
+function unifDatos(){
+  var mapa = {};
+  function add(n, marca, esVenta){
+    n = String(n||'').trim(); if(!n || !esAsesorReal(n)) return;
+    var o = mapa[n] || (mapa[n] = {nombre:n, ventas:0, marcas:{}});
+    o.marcas[marca] = true; if(esVenta) o.ventas++;
+  }
+  BRANDS.forEach(function(b){
+    Store.ventas(b.id).forEach(function(v){ add(v.asesor, b.id, true); });
+    Store.asesores(b.id).forEach(function(a){ add(a.nombre, b.id, false); });
+  });
+  return Object.keys(mapa).map(function(k){ return mapa[k]; }).sort(function(a,b){ return a.nombre.localeCompare(b.nombre); });
+}
+function unifPuntaje(n){
+  var t = String(n).trim().split(/\s+/);
+  var cap = t.filter(function(w){ return /^[A-ZÁÉÍÓÚÑ]/.test(w); }).length;
+  var tilde = (String(n).match(/[áéíóúñÁÉÍÓÚÑ]/g)||[]).length;
+  return cap*10 + tilde + String(n).length*0.01;
+}
+/* Sugerencias: devuelve {nombreVariante: nombreOficial} solo cuando hay UNA sola opción clara. */
+function unifSugerir(lista){
+  var grupos = {};
+  lista.forEach(function(x){
+    var k = claveAsesor(x.nombre); if(!k) return;
+    (grupos[k] = grupos[k] || []).push(x.nombre);
+  });
+  var ganador = {};
+  Object.keys(grupos).forEach(function(k){
+    ganador[k] = grupos[k].slice().sort(function(a,b){ return unifPuntaje(b)-unifPuntaje(a); })[0];
+  });
+  var res = {};
+  lista.forEach(function(x){
+    var kx = claveAsesor(x.nombre); if(!kx) return;
+    var tx = kx.split(' ');
+    if(ganador[kx] !== x.nombre){ res[x.nombre] = ganador[kx]; return; }   // misma persona, otra escritura
+    var cands = {};
+    Object.keys(ganador).forEach(function(ky){
+      if(ky === kx) return;
+      var ty = ky.split(' ');
+      if(ty.length < tx.length || ty[0] !== tx[0]) return;                  // el oficial trae igual o más datos
+      for(var i=1;i<tx.length;i++){ if(ty[i].indexOf(tx[i])!==0) return; }   // "Danielis J." → "Danielis Jimenez"
+      cands[ky] = true;
+    });
+    var ks = Object.keys(cands);
+    function compat(a, b){ var ta = a.split(' '), tb = b.split(' '); if(tb.length < ta.length) return false; for(var i=0;i<ta.length;i++){ if(tb[i].indexOf(ta[i])!==0) return false; } return true; }
+    ks = ks.filter(function(ky){ return !ks.some(function(kz){ return kz!==ky && compat(ky, kz); }); });   // se queda la versión más completa
+    if(ks.length === 1) res[x.nombre] = ganador[ks[0]];
+  });
+  /* Si A apunta a B y B apunta a C, A apunta directo a C. */
+  Object.keys(res).forEach(function(n){ var g = 0; while(res[res[n]] && g++ < 6) res[n] = res[res[n]]; });
+  return res;
+}
+function unifRender(){
+  var box = document.getElementById('cfgUnifPanel'); if(!box) return;
+  var lista = unifDatos();
+  if(lista.length < 2){ box.innerHTML = '<div class="mini-empty">No hay nombres que unificar.</div>'; return; }
+  var sug = unifSugerir(lista);
+  var nSug = Object.keys(sug).length;
+  var filas = lista.map(function(x, i){
+    var marcas = Object.keys(x.marcas).map(function(id){ return evMarcaNombre(id); }).join(', ');
+    var opts = '<option value="">— Es una persona distinta —</option>' + lista.filter(function(y){ return y!==x; }).map(function(y){
+      return '<option value="'+evEsc(y.nombre)+'"'+(sug[x.nombre]===y.nombre?' selected':'')+'>Es '+evEsc(y.nombre)+'</option>';
+    }).join('');
+    return '<tr'+(sug[x.nombre]?' style="background:rgba(120,160,255,.08);"':'')+'><td style="font-weight:600;color:var(--text);">'+evEsc(x.nombre)+'</td><td>'+evEsc(marcas)+'</td><td>'+x.ventas+'</td>' +
+      '<td><select data-unif="'+i+'" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 8px;font-size:12.5px;max-width:260px;">'+opts+'</select></td></tr>';
+  }).join('');
+  box.innerHTML =
+    '<p style="font-size:12px;color:var(--text-soft);margin-bottom:8px;">'+(nSug ? 'Detecté <strong>'+nSug+'</strong> nombre'+(nSug===1?'':'s')+' que parecen repetidos (resaltados) y los dejé ya seleccionados. Revísalos: si alguno no es la misma persona, cámbialo a "persona distinta".' : 'No detecté repetidos automáticamente. Si ves a una misma persona escrita de dos formas, elígela en la lista de la derecha.')+'</p>' +
+    '<div class="table-wrap"><table style="min-width:620px;"><thead><tr><th>Nombre escrito</th><th>Marcas</th><th>Ventas</th><th>Unificar con</th></tr></thead><tbody>'+filas+'</tbody></table></div>' +
+    '<div style="margin-top:10px;display:flex;gap:10px;align-items:center;"><button class="btn btn-primary" id="cfgUnifAplicar">Unificar los seleccionados</button><span id="cfgUnifMsg" style="font-size:12px;color:var(--text-soft);"></span></div>' +
+    '<p style="font-size:11px;color:var(--text-mute);margin-top:8px;">Antes de cambiar nada se descarga un archivo de respaldo con tus ventas y asesores actuales.</p>';
+  box._lista = lista;
+}
+function unifRespaldo(){
+  var bk = {fecha:new Date().toISOString(), alias:aliasAsesores(), marcas:{}};
+  BRANDS.forEach(function(b){
+    bk.marcas[b.id] = {ventas:Store.ventas(b.id), asesores:Store.asesores(b.id),
+      garantias:Store.get(Store.k.garantias(b.id), []), incidencias:Store.get(Store.k.incidencias(b.id), []),
+      gestion:Store.get(Store.k.gestion(b.id), []), asistencia:Store.get(Store.k.asistencia(b.id), [])};
+  });
+  try{
+    var blob = new Blob([JSON.stringify(bk)], {type:'application/json'});
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = 'respaldo-antes-de-unificar-asesores.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }catch(e){}
+}
+function unifMigrar(){
+  var r = {ventas:0, otros:0, roster:0};
+  BRANDS.forEach(function(b){
+    var vs = Store.ventas(b.id), ch = false;
+    vs.forEach(function(x){ if(x.asesor){ var c = canonAsesor(x.asesor); if(c!==x.asesor){ x.asesor = c; ch = true; r.ventas++; } } });
+    if(ch) Store.set(Store.k.ventas(b.id), vs);
+    ['garantias','incidencias'].forEach(function(col){
+      var l = Store.get(Store.k[col](b.id), []); if(!Array.isArray(l)) return; var c2 = false;
+      l.forEach(function(x){ if(x && x.asesor){ var c = canonAsesor(x.asesor); if(c!==x.asesor){ x.asesor = c; c2 = true; r.otros++; } } });
+      if(c2) Store.set(Store.k[col](b.id), l);
+    });
+    [['gestion','semanaISO'],['asistencia','fecha']].forEach(function(p){
+      var l = Store.get(Store.k[p[0]](b.id), []); if(!Array.isArray(l)) return; var c3 = false, usados = {};
+      l.forEach(function(x){ if(x && x.asesorNombre) usados[x.asesorNombre+'|'+x[p[1]]] = true; });
+      l.forEach(function(x){
+        if(!x || !x.asesorNombre) return;
+        var c = canonAsesor(x.asesorNombre); if(c===x.asesorNombre || usados[c+'|'+x[p[1]]]) return;
+        x.asesorNombre = c; usados[c+'|'+x[p[1]]] = true; c3 = true; r.otros++;
+      });
+      if(c3) Store.set(Store.k[p[0]](b.id), l);
+    });
+    var ro = Store.asesores(b.id).slice();
+    ro.sort(function(a,b2){ return (canonAsesor(b2.nombre)===b2.nombre ? 1 : 0) - (canonAsesor(a.nombre)===a.nombre ? 1 : 0); });
+    var vistos = {}, out = [], c4 = false;
+    ro.forEach(function(a){
+      var c = canonAsesor(a.nombre), k = claveAsesor(c);
+      if(k && vistos[k]){
+        if(!vistos[k].sucursalId && a.sucursalId) vistos[k].sucursalId = a.sucursalId;
+        if(a.activo) vistos[k].activo = true;
+        r.roster++; c4 = true; return;
+      }
+      if(c !== a.nombre){ a.nombre = c; c4 = true; }
+      if(k) vistos[k] = a; out.push(a);
+    });
+    if(c4) Store.set(Store.k.asesores(b.id), out);
+  });
+  return r;
+}
+function unifAplicar(){
+  var box = document.getElementById('cfgUnifPanel'); if(!box || !box._lista) return;
+  var lista = box._lista, pares = {};
+  box.querySelectorAll('select[data-unif]').forEach(function(sel){
+    if(sel.value) pares[lista[parseInt(sel.getAttribute('data-unif'),10)].nombre] = sel.value;
+  });
+  var vars = Object.keys(pares);
+  if(!vars.length){ document.getElementById('cfgUnifMsg').textContent = 'No hay nada seleccionado para unificar.'; return; }
+  function oficialDe(n){ var g = 0; while(pares[n] && g++ < 6) n = pares[n]; return n; }
+  if(!confirm('Vas a unificar '+vars.length+' nombre'+(vars.length===1?'':'s')+' en las 3 marcas. Se descargará un respaldo antes de empezar. ¿Continuar?')) return;
+  unifRespaldo();
+  var alias = aliasAsesores();
+  vars.forEach(function(v){ var k = claveAsesor(v), o = oficialDe(v); if(k && o && o!==v) alias[k] = o; });
+  Store.set(ALIAS_KEY, alias);
+  var r = unifMigrar();
+  try{ if(window.cfgDrawAll) window.cfgDrawAll(); }catch(e){}
+  unifRender();
+  var m = document.getElementById('cfgUnifMsg');
+  if(m) m.textContent = 'Listo: '+r.ventas+' venta'+(r.ventas===1?'':'s')+' y '+r.otros+' registro'+(r.otros===1?'':'s')+' más pasaron al nombre oficial; '+r.roster+' asesor'+(r.roster===1?'':'es')+' repetido'+(r.roster===1?'':'s')+' se fusionó. Recarga la página para ver todo actualizado.';
+}
+document.addEventListener('click', function(e){
+  var t = e.target; if(!t || !t.id) return;
+  if(t.id==='cfgUnifAbrir') unifRender();
+  else if(t.id==='cfgUnifAplicar') unifAplicar();
+});
+
 
 /* ---- Metas: período actual, formato y cálculo de cumplimiento ---- */
 var MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -2182,7 +2364,7 @@ function alertaCaidaBrand(brand){
   /* Un asesor Externo/Socio tampoco entra en esta alerta de rendimiento — mismo criterio
      que en el resto del panel (ver repAsesorActivo). */
   Store.asesores(brand.id).filter(function(a){return esAsesorReal(a.nombre) && repAsesorActivo(brand.id, a.nombre);}).forEach(function(a){
-    var r = evaluarCaidaEntidad(ventas.filter(function(v){return v.asesor===a.nombre;}), desde, fin);
+    var r = evaluarCaidaEntidad(ventas.filter(function(v){return mismoAsesor(v.asesor, a.nombre);}), desde, fin);
     if(r) items.push({tipo:'Asesor', nombre:a.nombre, actual:r.actual, promedio:r.promedio, pct:r.pct});
   });
   items.sort(function(a,b){ return a.pct-b.pct; });
@@ -2956,7 +3138,7 @@ function renderVentasTab(brand, panel){
         if(desde && v.fecha < desde) return false;
         if(hasta && v.fecha > hasta) return false;
         if(suc && v.sucursal !== suc) return false;
-        if(ase && v.asesor !== ase) return false;
+        if(ase && !mismoAsesor(v.asesor, ase)) return false;
         if(can && v.canal !== can) return false;
         return true;
       });
@@ -3006,7 +3188,7 @@ function renderVentasTab(brand, panel){
     pendingDuplicate = false;
     var v = id ? Store.ventas(brand.id).find(function(x){return x.id===id;}) : null;
     var sucursales = Store.sucursales(brand.id).filter(function(s){return s.activo || (v && v.sucursal===s.nombre);});
-    var asesores = Store.asesores(brand.id).filter(function(a){return a.activo || (v && v.asesor===a.nombre);});
+    var asesores = Store.asesores(brand.id).filter(function(a){return a.activo || (v && mismoAsesor(v.asesor, a.nombre));});
     var canales = Store.canales(brand.id);
     var today = new Date().toISOString().slice(0,10);
     var holder = byId('ventaFormHolder');
@@ -3018,7 +3200,7 @@ function renderVentasTab(brand, panel){
           '<div class="field"><label>Fecha</label><input type="date" id="vf-fecha" value="'+(v?v.fecha:today)+'"></div>' +
           '<div class="field"><label>N° Nota Fina</label><input type="text" id="vf-nota" value="'+(v?v.notaFina:'')+'" placeholder="Ej. 1555"></div>' +
           '<div class="field"><label>Sucursal</label><select id="vf-form-suc"><option value="">Selecciona…</option>'+sucursales.map(function(s){return '<option'+(v&&v.sucursal===s.nombre?' selected':'')+'>'+s.nombre+'</option>';}).join('')+'</select></div>' +
-          '<div class="field"><label>Asesor</label><select id="vf-form-ase"><option value="">Selecciona…</option>'+asesores.map(function(a){return asesorOpcion(a, v&&v.asesor===a.nombre);}).join('')+'</select></div>' +
+          '<div class="field"><label>Asesor</label><select id="vf-form-ase"><option value="">Selecciona…</option>'+asesores.map(function(a){return asesorOpcion(a, v&&mismoAsesor(v.asesor, a.nombre));}).join('')+'</select></div>' +
           '<div class="field grow"><label>Producto</label><input type="text" id="vf-producto" value="'+(v?v.producto:'')+'" placeholder="Ej. Laptop 15\\" 8GB/256GB"></div>' +
           '<div class="field"><label>Cantidad</label><input type="number" min="1" step="1" id="vf-cant" value="'+(v?v.cantidad:1)+'"></div>' +
           '<div class="field"><label>Precio</label><input type="number" min="0" step="0.01" id="vf-precio" value="'+(v?v.precio:'')+'"></div>' +
@@ -3375,7 +3557,7 @@ function renderGestionTab(brand, panel){
       kpi('Promedio del equipo', promedioEquipo!==null?promedioEquipo.toFixed(1):'—', 'meta', promedioEquipo!==null?notaGestionTag(promedioEquipo).label:'Sin calificaciones esta semana');
 
     byId('gctbody').innerHTML = asesoresList.map(function(a){
-      var ventasSemana = Store.ventas(brand.id).filter(function(v){ return v.asesor===a.nombre && v.fecha>=semana && v.fecha<=domingo; });
+      var ventasSemana = Store.ventas(brand.id).filter(function(v){ return mismoAsesor(v.asesor, a.nombre) && v.fecha>=semana && v.fecha<=domingo; });
       var totalSemana = ventasSemana.reduce(function(s,v){return s+(v.total||0);},0);
       var d = datos[a.nombre];
       var prom = promedioGestion(d.merged);
@@ -3754,7 +3936,7 @@ function renderIncidenciasTab(brand, panel){
       var suc = byId('if-suc').value, ase = byId('if-ase').value, tipo = byId('if-tipo').value, estado = byId('if-estado').value;
       var lista = Store.incidencias(brand.id).filter(function(i){
         if(suc && i.sucursal !== suc) return false;
-        if(ase && i.asesor !== ase) return false;
+        if(ase && !mismoAsesor(i.asesor, ase)) return false;
         if(tipo && i.tipo !== tipo) return false;
         if(estado && i.estado !== estado) return false;
         return true;
@@ -3798,7 +3980,7 @@ function renderIncidenciasTab(brand, panel){
   function openForm(id){
     var inc = id ? Store.incidencias(brand.id).find(function(x){return x.id===id;}) : null;
     var sucursales = Store.sucursales(brand.id).filter(function(s){return s.activo || (inc && inc.sucursal===s.nombre);});
-    var asesores = Store.asesores(brand.id).filter(function(a){return a.activo || (inc && inc.asesor===a.nombre);});
+    var asesores = Store.asesores(brand.id).filter(function(a){return a.activo || (inc && mismoAsesor(inc.asesor, a.nombre));});
     var today = new Date().toISOString().slice(0,10);
     var holder = byId('incFormHolder');
     holder.innerHTML =
@@ -3808,7 +3990,7 @@ function renderIncidenciasTab(brand, panel){
         '<div class="form-grid">' +
           '<div class="field"><label>Fecha</label><input type="date" id="if-form-fecha" value="'+(inc?inc.fecha:today)+'"></div>' +
           '<div class="field"><label>Sucursal</label><select id="if-form-suc"><option value="">Selecciona…</option>'+sucursales.map(function(s){return '<option'+(inc&&inc.sucursal===s.nombre?' selected':'')+'>'+s.nombre+'</option>';}).join('')+'</select></div>' +
-          '<div class="field"><label>Asesor</label><select id="if-form-ase"><option value="">— (sucursal en general)</option>'+asesores.map(function(a){return asesorOpcion(a, inc&&inc.asesor===a.nombre);}).join('')+'</select></div>' +
+          '<div class="field"><label>Asesor</label><select id="if-form-ase"><option value="">— (sucursal en general)</option>'+asesores.map(function(a){return asesorOpcion(a, inc&&mismoAsesor(inc.asesor, a.nombre));}).join('')+'</select></div>' +
           '<div class="field"><label>Tipo</label><select id="if-form-tipo">'+TIPOS_INCIDENCIA.map(function(t){return '<option'+(inc&&inc.tipo===t?' selected':'')+'>'+t+'</option>';}).join('')+'</select></div>' +
           '<div class="field"><label>Gravedad</label><select id="if-form-grav">'+GRAVEDADES_INCIDENCIA.map(function(g){return '<option'+(inc?(inc.gravedad===g?' selected':''):(g==='Media'?' selected':''))+'>'+g+'</option>';}).join('')+'</select></div>' +
           '<div class="field grow"><label>Descripción</label><input type="text" id="if-form-desc" value="'+(inc?inc.descripcion:'')+'" placeholder="Ej. Llegó tarde sin avisar, cliente se quejó de la atención…"></div>' +
@@ -3954,7 +4136,7 @@ function renderGarantiasTab(brand, panel){
       var suc = byId('gf-suc').value, ase = byId('gf-ase').value, falla = byId('gf-falla').value, estado = byId('gf-estado').value, revisar = byId('gf-revisar').value;
       var lista = Store.garantias(brand.id).filter(function(g){
         if(suc && g.sucursal !== suc) return false;
-        if(ase && g.asesor !== ase) return false;
+        if(ase && !mismoAsesor(g.asesor, ase)) return false;
         if(falla && g.falla !== falla) return false;
         if(estado && g.estado !== estado) return false;
         if(revisar==='si' && !g.revisar) return false;
@@ -4021,7 +4203,7 @@ function renderGarantiasTab(brand, panel){
   function openForm(id){
     var g = id ? Store.garantias(brand.id).find(function(x){return x.id===id;}) : null;
     var sucursales = Store.sucursales(brand.id).filter(function(s){return s.activo || (g && g.sucursal===s.nombre);});
-    var asesores = Store.asesores(brand.id).filter(function(a){return a.activo || (g && g.asesor===a.nombre);});
+    var asesores = Store.asesores(brand.id).filter(function(a){return a.activo || (g && mismoAsesor(g.asesor, a.nombre));});
     var today = new Date().toISOString().slice(0,10);
     var holder = byId('garFormHolder');
     holder.innerHTML =
@@ -4036,7 +4218,7 @@ function renderGarantiasTab(brand, panel){
         '<div class="form-grid">' +
           '<div class="field"><label>Fecha</label><input type="date" id="gf-form-fecha" value="'+(g?g.fecha:today)+'"></div>' +
           '<div class="field"><label>Sucursal</label><select id="gf-form-suc"><option value="">Selecciona…</option>'+sucursales.map(function(s){return '<option'+(g&&g.sucursal===s.nombre?' selected':'')+'>'+s.nombre+'</option>';}).join('')+'</select></div>' +
-          '<div class="field"><label>Asesor</label><select id="gf-form-ase"><option value="">— (no se sabe)</option>'+asesores.map(function(a){return asesorOpcion(a, g&&g.asesor===a.nombre);}).join('')+'</select></div>' +
+          '<div class="field"><label>Asesor</label><select id="gf-form-ase"><option value="">— (no se sabe)</option>'+asesores.map(function(a){return asesorOpcion(a, g&&mismoAsesor(g.asesor, a.nombre));}).join('')+'</select></div>' +
           '<div class="field grow"><label>Producto</label><input type="text" id="gf-form-producto" value="'+(g?g.producto:'')+'" placeholder="Ej. Laptop 15\\" 8GB/256GB"></div>' +
           '<div class="field"><label>Falla</label><input type="text" id="gf-form-falla" list="fallas-comunes-datalist" value="'+(g?(g.falla||''):'')+'" placeholder="Ej. Batería"></div>' +
           '<div class="field grow"><label>Técnico revisor</label><input type="text" id="gf-form-tecnico" value="'+(g?(g.tecnico||''):'')+'" placeholder="Quién lo revisó antes de salir a tienda (opcional)"></div>' +
@@ -4939,7 +5121,7 @@ function refreshConsolidado(){
     if(desde && v.fecha < desde) return false;
     if(hasta && v.fecha > hasta) return false;
     if(suc && v.sucursal !== suc) return false;
-    if(ase && v.asesor !== ase) return false;
+    if(ase && !mismoAsesor(v.asesor, ase)) return false;
     if(can && v.canal !== can) return false;
     return true;
   });
@@ -5414,7 +5596,7 @@ function renderConfigManager(){
     var el = document.getElementById('cfgAsesoresList');
     if(list.length===0){ el.innerHTML = '<div class="mini-empty">Aún no hay asesores registrados.</div>'; return; }
     el.innerHTML = list.map(function(a){
-      var enUso = Store.ventas(cfgCurrent).some(function(v){return v.asesor===a.nombre;});
+      var enUso = Store.ventas(cfgCurrent).some(function(v){return mismoAsesor(v.asesor, a.nombre);});
       var tipo = a.tipo || 'Interno';
       return '<div class="mini-row"><span class="nombre">'+a.nombre+'</span><span class="meta">'+(sucById[a.sucursalId]||'sin sucursal')+'</span>' +
         '<button class="tipo-badge tipo-'+tipo.toLowerCase()+'" data-tipo-ase="'+a.id+'" title="Toca para cambiar el tipo (Interno / Externo / Socio)">'+tipo+'</button>' +
@@ -6121,8 +6303,8 @@ function repConstruirComparativo(cfg){
     var marcaRef2 = cmp.marcaRef;
     var mRef2 = BRANDS.filter(function(b){return b.id===marcaRef2;})[0];
     var baseA = repFiltrar(repVentasCrudas([marcaRef2]), per.desde, per.hasta, cmp.sucursalRef ? {sucursal: cmp.sucursalRef} : {});
-    var vAa = baseA.filter(function(v){return v.asesor===cmp.asesorA;});
-    var vBa = baseA.filter(function(v){return v.asesor===cmp.asesorB;});
+    var vAa = baseA.filter(function(v){return mismoAsesor(v.asesor, cmp.asesorA);});
+    var vBa = baseA.filter(function(v){return mismoAsesor(v.asesor, cmp.asesorB);});
     out.labelA = cmp.asesorA; out.labelB = cmp.asesorB;
     out.ventasA = vAa; out.ventasB = vBa;
     out.resumen = repCompararConjuntos(vAa, vBa);
@@ -9168,10 +9350,11 @@ setInterval(function(){
 var EQ = {built:false, msg:null};
 var EQ_ROLES = {asesor:'Asesor', tecnico:'Técnico', asignadora:'Asignadora'};
 function eqSyncMarca(nombre, marca, activar){
-  var n = String(nombre||'').trim().toLowerCase(); if(!n) return;
-  var a = Store.asesores(marca).filter(function(x){ return String(x.nombre||'').trim().toLowerCase()===n; })[0];
+  var oficial = canonAsesor(String(nombre||'').trim());
+  var n = claveAsesor(oficial); if(!n) return;
+  var a = Store.asesores(marca).filter(function(x){ return claveAsesor(canonAsesor(x.nombre))===n; })[0];
   if(a){ if(!!a.activo !== !!activar) Store.toggleAsesor(marca, a.id); }
-  else if(activar){ Store.addAsesor(marca, String(nombre).trim(), '', 'Interno'); }
+  else if(activar){ Store.addAsesor(marca, oficial, '', 'Interno'); }
 }
 function eqSyncPersona(u, rol, marcas, activo){
   BRANDS.forEach(function(b){
