@@ -11399,7 +11399,7 @@ function renderConfigView(cfg){
         <label class="field">Período<select id="rep-per"><option value="todo">Todo el historial</option><option value="mes">Este mes</option><option value="mesant">Mes anterior</option><option value="30d">Últimos 30 días</option><option value="rango">Rango personalizado</option></select></label>
         <label class="field">Desde<input type="date" id="rep-from"></label>
         <label class="field">Hasta<input type="date" id="rep-to" value="${todayISO()}"></label>
-        <label class="field">Marca<select id="rep-marca"><option value="">Todas las marcas</option>${BRANDS.map(b=>'<option value="'+b+'">'+BRAND_LABEL[b]+'</option>').join('')}</select></label>
+        <div class="field">Marcas<div id="rep-marcas" style="display:flex;gap:14px;flex-wrap:wrap;padding-top:6px;">${BRANDS.map(b=>'<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;cursor:pointer;"><input type="checkbox" class="rep-m" value="'+b+'" checked style="width:auto;"> '+BRAND_LABEL[b]+'</label>').join('')}</div></div>
         <label class="field">Tipo<select id="rep-tipo"><option value="">Garantías + Servicio técnico</option>${TIPOS_CASO.map(t=>'<option value="'+esc(t)+'">'+TIPO_ICON[t]+' '+esc(t)+'</option>').join('')}</select></label>
         <label class="field">Técnico<select id="rep-tec"><option value="">Todos los técnicos</option>${cfg.technicians.filter(t=>t.active).map(t=>'<option value="'+esc(t.id)+'">'+esc(t.name)+'</option>').join('')}</select></label>
       </div>
@@ -11483,7 +11483,8 @@ function wireCurrentView(cases, cfg){
     [fEl,tEl].forEach(el=> el.addEventListener('change', ()=>{ per.value='rango'; }));
     genRep.addEventListener('click', async ()=>{
       const from = fEl.value, to = tEl.value;
-      const marca = document.getElementById('rep-marca').value;
+      const marca = [...document.querySelectorAll('#rep-marcas .rep-m:checked')].map(x=>x.value);
+      if(!marca.length){ toast('Elige al menos una marca','⚠️'); return; }
       const tipo = document.getElementById('rep-tipo').value;
       const tec = document.getElementById('rep-tec').value;
       if(from && to && from > to){ toast('La fecha "Desde" no puede ser posterior a "Hasta"','⚠️'); return; }
@@ -11722,10 +11723,14 @@ function rangeMonthlyBuckets(list, fromStr, toStr){
 }
 
 function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilter, tecnicoFilter){
+  /* marcaFilter puede ser una marca, varias (ej. Tekio e Infot) o vacío/todas. */
+  const marcasSel = Array.isArray(marcaFilter) ? marcaFilter.filter(Boolean) : (marcaFilter ? [marcaFilter] : []);
+  const todasMarcas = marcasSel.length===0 || marcasSel.length>=BRANDS.length;
+  const variasMarcas = todasMarcas || marcasSel.length>1;
   const filtered = allCases.filter(c=>{
     if(fromDate && c.fecha < fromDate) return false;
     if(toDate && c.fecha > toDate) return false;
-    if(marcaFilter && c.marca !== marcaFilter) return false;
+    if(!todasMarcas && marcasSel.indexOf(c.marca)===-1) return false;
     if(tipoFilter && tipoOf(c) !== tipoFilter) return false;
     if(tecnicoFilter && c.tecnicoId !== tecnicoFilter) return false;
     return true;
@@ -11752,7 +11757,7 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
   const techs = (cfg.technicians||[]).filter(t=>t.active);
   const techMetrics = techs.map(t=>({t, m: computeTechMetrics(filtered, t.id)}));
 
-  const brandRows = marcaFilter ? [] : BRANDS.map(b=>{
+  const brandRows = !variasMarcas ? [] : (todasMarcas ? BRANDS : marcasSel).map(b=>{
     const list = filtered.filter(c=>c.marca===b);
     const kb = computeKpis(list);
     return {label: BRAND_LABEL[b], total:kb.total, resueltos:kb.resueltos, pctResolucion:kb.pctResolucion,
@@ -11790,7 +11795,7 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
   const REPORT_DATA = {
     meta:{
       fromLabel: fmtDateShort(effFrom+'T00:00:00'), toLabel: fmtDateShort(effTo+'T00:00:00'),
-      marcaLabel: marcaFilter ? BRAND_LABEL[marcaFilter] : 'Todas las marcas',
+      marcaLabel: todasMarcas ? 'Todas las marcas' : marcasSel.map(b=>BRAND_LABEL[b]).join(' + '),
       tipoLabel: tipoFilter ? (TIPO_ICON[tipoFilter]+' '+tipoFilter) : 'Garantías + Servicio técnico',
       tecnicoLabel: tecFiltObj ? ('Técnico: '+tecFiltObj.name) : '',
       generatedAt: fmtDateTime(nowIso()),
@@ -11803,7 +11808,7 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
       garantias:k.garantias, servicios:k.servicios, porEntregar:k.porEntregar,
     },
     estado:{ labels:Object.keys(k.porEstado), values:Object.values(k.porEstado), colors:Object.keys(k.porEstado).map(e=>ESTADO_COLOR[e]) },
-    marca: marcaFilter ? null : { labels: porMarca.map(x=>x[0]), values: porMarca.map(x=>x[1]) },
+    marca: !variasMarcas ? null : { labels: porMarca.map(x=>x[0]), values: porMarca.map(x=>x[1]) },
     tipo: tipoFilter ? null : { labels: porTipo.map(x=>x[0]), values: porTipo.map(x=>x[1]) },
     sucursal:{ labels: porSucursal.map(x=>x[0]), values: porSucursal.map(x=>x[1]) },
     tecnico:{ labels: porTecnico.map(x=>x[0]), values: porTecnico.map(x=>x[1]) },
