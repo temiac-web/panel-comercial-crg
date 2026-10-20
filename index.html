@@ -1841,69 +1841,6 @@ function mismoAsesor(a, b){
   var x = claveAsesor(canonAsesor(a)), y = claveAsesor(canonAsesor(b));
   return x !== '' && x === y;
 }
-/* ---- Nombres repetidos de técnicos y asesores (Mesa de Garantías) ----
-   Los nombres de técnico y asesor de los casos llegan escritos de varias formas ("Cristian",
-   "Cristian Soto", "cristian s."). Aquí se agrupan solos cuando es seguro (mismo primer nombre y
-   el resto compatible) y, si hay duda, se pueden unir a mano. Si la persona ya tiene acceso en
-   Equipo, su nombre oficial es el de su acceso. Nada se borra: solo cambia cómo se agrupan. */
-var NC_ALIAS_TEC_KEY = 'crg_alias_tecnicos';
-var NC = {cache:{}};
-function ncInvalidar(){ NC.cache = {}; }
-function ncKeyAlias(rol){ return rol==='tecnico' ? NC_ALIAS_TEC_KEY : ALIAS_KEY; }
-function ncAliasMap(rol){ var a = Store.get(ncKeyAlias(rol), {}); return (a && typeof a==='object') ? a : {}; }
-function ncSetAlias(rol, variante, oficial){
-  var k = claveAsesor(variante); if(!k || !oficial) return;
-  var a = ncAliasMap(rol); a[k] = oficial; Store.set(ncKeyAlias(rol), a); ncInvalidar();
-}
-function ncQuitarAlias(rol, k){ var a = ncAliasMap(rol); delete a[k]; Store.set(ncKeyAlias(rol), a); ncInvalidar(); }
-function ncTok(n){ return claveAsesor(n).split(' ').filter(Boolean); }
-function ncCompat(x, y){
-  if(!x.length || !y.length) return false;
-  if(x.length > y.length){ var t = x; x = y; y = t; }
-  if(x[0] !== y[0]) return false;
-  for(var i=1;i<x.length;i++){ if(y[i].indexOf(x[i])!==0) return false; }
-  return true;
-}
-function ncBuild(rol){
-  var out = {porClave:{}, grupos:[]};
-  if(typeof EV==='undefined' || !EV.data) return out;
-  var alias = ncAliasMap(rol), grupos = [];
-  (EV.data.usuarios||[]).forEach(function(u){
-    if(u.rol!==rol) return;
-    var nm = u.nombre || u.email || u.id;
-    grupos.push({user:u, nombre:nm, tok:ncTok(nm), variantes:[nm]});
-  });
-  var vistos = {}, items = [];
-  (EV.data.casos||[]).forEach(function(c){
-    var n = String((rol==='tecnico' ? c.tecnico : c.asesor) || '').trim();
-    if(!n || vistos[n]) return; vistos[n] = true;
-    var k = claveAsesor(n);
-    items.push({orig:n, usar:(k && alias[k]) ? alias[k] : n});
-  });
-  items.sort(function(a,b){ return (ncTok(b.usar).length - ncTok(a.usar).length) || (unifPuntaje(b.usar) - unifPuntaje(a.usar)); });
-  items.forEach(function(it){
-    var tok = ncTok(it.usar); if(!tok.length) return;
-    var cand = grupos.filter(function(g){ return ncCompat(tok, g.tok); });
-    var exacto = cand.filter(function(g){ return g.tok.join(' ') === tok.join(' '); });
-    var g = exacto.length ? exacto[0] : (cand.length===1 ? cand[0] : null);
-    if(g){ if(g.variantes.indexOf(it.orig)===-1) g.variantes.push(it.orig); }
-    else grupos.push({user:null, nombre:it.usar, tok:tok, variantes:[it.orig]});
-  });
-  grupos.forEach(function(g){
-    var rep = g.user ? {id:g.user.id, uid:g.user.id, name:(g.user.nombre||g.nombre), active:g.user.activo!==false}
-                     : {id:'x_'+g.tok.join('_'), uid:'', name:g.nombre, active:false};
-    g.rep = rep;
-    g.variantes.concat([g.nombre]).forEach(function(v){ var k = claveAsesor(v); if(k && !out.porClave[k]) out.porClave[k] = rep; });
-    out.grupos.push(g);
-  });
-  return out;
-}
-function ncGet(rol){ return NC.cache[rol] || (NC.cache[rol] = ncBuild(rol)); }
-function nomCanon(nombre, rol){
-  var n = String(nombre==null ? '' : nombre).trim(); if(!n) return null;
-  var k = claveAsesor(n); if(!k) return null;
-  return ncGet(rol).porClave[k] || null;
-}
 function unifDatos(){
   var mapa = {};
   function add(n, marca, esVenta){
@@ -4190,7 +4127,7 @@ function renderGarantiasTab(brand, panel){
       '</p>' +
       '<div id="garFormHolder"></div>' +
       '<div class="table-wrap">' +
-        '<table><thead><tr><th>Fecha</th><th>Folio</th><th>Tipo</th><th>Sucursal</th><th>Asesor</th><th>Producto</th><th>Falla</th><th>Técnico</th><th>Estado</th><th>Solución</th><th></th></tr></thead>' +
+        '<table><thead><tr><th>Fecha</th><th>Folio</th><th>Tipo</th><th>Sucursal</th><th>Asesor</th><th>Producto</th><th>Falla</th><th>Técnico</th><th>Estado</th><th>Solución / observación del técnico</th><th></th></tr></thead>' +
         '<tbody id="gtbody"></tbody></table>' +
       '</div>';
 
@@ -9223,7 +9160,7 @@ function evIniciar(){
   fuentes.forEach(function(f){
     EV.unsubs.push(f[1].onSnapshot(function(snap){
       EV.data[f[0]] = snap.docs.map(function(d){ var o=d.data(); o.id=d.id; return o; });
-      if(f[0]==='casos' || f[0]==='usuarios'){ try{ ncInvalidar(); }catch(e){} try{ if(typeof GTS!=='undefined' && GTS && GTS.refresh) GTS.refresh(); }catch(e){} }
+      if(f[0]==='casos' || f[0]==='usuarios'){ try{ if(typeof GTS!=='undefined' && GTS && GTS.refresh) GTS.refresh(); }catch(e){} }
       if(f[0]==='ventas_asesor') evImportar();
       if(f[0]==='casos') evImportarCasos();
       evActualizarBadge();
@@ -9282,7 +9219,7 @@ function evImportar(){
    cambies tú se respeta hasta que el técnico vuelva a mover algo. ---- */
 var EV_CASO_A_GAR = {'Pendiente':'Abierta','En proceso':'En proceso','Resuelto':'Resuelta'};
 function evCasoCampos(c){
-  return {estado:EV_CASO_A_GAR[c.estado]||'Abierta', tecnico:(function(){ var r = nomCanon(c.tecnico,'tecnico'); return r ? r.name : (c.tecnico||''); })(), solucion:c.observaciones||'',
+  return {estado:EV_CASO_A_GAR[c.estado]||'Abierta', tecnico:c.tecnico||'', solucion:c.observaciones||'',
     fechaResolucion:c.fechaResuelto||'', entregado:!!c.fechaEntregado, fechaEntrega:c.fechaEntregado||''};
 }
 function evEstadoGarACaso(e){
@@ -9307,7 +9244,7 @@ function evImportarCasos(){
     var aseOk = !c.asesor || Store.asesores(marca).some(function(a){ return normNombre(a.nombre)===normNombre(c.asesor); });
     Store.addGarantia(marca, Object.assign({
       folio:c.folio||'', tipoCaso:/serv/i.test(c.tipo||'') ? 'Servicio Técnico' : 'Garantía',
-      fecha:c.fechaRecibido||evHoy(), sucursal:c.sucursal||'', asesor:(function(){ var r = nomCanon(c.asesor,'asesor'); return r ? r.name : (c.asesor||''); })(), cliente:c.cliente||'',
+      fecha:c.fechaRecibido||evHoy(), sucursal:c.sucursal||'', asesor:c.asesor||'', cliente:c.cliente||'',
       producto:c.equipo||'Sin especificar', serial:c.serial||'', falla:c.falla||'Sin especificar',
       notaFinaVenta:c.notaFina||'', origen:'panel-asesores', panelId:c.id, panelSync:sync, revisar:!(sucOk&&aseOk)
     }, campos));
@@ -9545,7 +9482,12 @@ function renderGM(){
     root.innerHTML=
       '<div id="gmMsg"></div>'+
       '<p style="font-size:11.5px;color:var(--text-mute);margin:0 0 12px;">Estos casos los registran los asesores en el Panel de Asesores y el técnico los va actualizando allí. Aquí se ven todos juntos, de las 3 marcas.</p>'+
-      '<input type="file" id="gm-file" accept=".html,text/html" style="display:none;">'+
+      '<div class="filterbar" style="margin-bottom:14px;">'+
+        '<input type="file" id="gm-file" accept=".html,text/html" style="display:none;">'+
+        '<button class="btn btn-primary" data-gm="nueva"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Nueva garantía</button>'+
+        '<button class="btn btn-ghost" data-gm="reporte" style="margin-left:auto;">Generar reporte</button>'+
+        '<button class="btn btn-ghost" data-gm="informe">Informe rápido</button>'+
+      '</div>'+
       '<div id="gmImport"></div><div id="gmForm"></div><div id="gmRep"></div>'+
       '<div class="grid-kpi" id="gmKpis"></div>'+
       '<div id="gmCharts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:14px;"></div>'+
@@ -9562,7 +9504,7 @@ function renderGM(){
         '<button class="btn btn-ghost" data-gm="limpiar">Limpiar</button>'+
       '</div>'+
       '<p id="gmResumen" style="font-size:11.5px;color:var(--text-mute);margin:-6px 0 12px;"></p>'+
-      '<div class="table-wrap"><table style="min-width:1100px;"><thead><tr><th>Fecha</th><th>Folio</th><th>Marca</th><th>Tipo</th><th>Sucursal</th><th>Asesor</th><th>Equipo</th><th>Falla</th><th>Técnico</th><th>Estado</th><th>Detalle</th><th></th></tr></thead><tbody id="gmBody"></tbody></table></div>';
+      '<div class="table-wrap"><table style="min-width:1100px;"><thead><tr><th>Fecha</th><th>Folio</th><th>Marca</th><th>Tipo</th><th>Sucursal</th><th>Asesor</th><th>Equipo</th><th>Falla</th><th>Técnico</th><th>Estado</th><th>Observación del técnico / detalle</th><th></th></tr></thead><tbody id="gmBody"></tbody></table></div>';
     ['gm-marca','gm-tipo','gm-estado','gm-tec','gm-ase','gm-falla','gm-desde','gm-hasta'].forEach(function(i){ document.getElementById(i).addEventListener('change', gmLista); });
     document.getElementById('gm-q').addEventListener('input', gmLista);
     document.getElementById('gm-file').addEventListener('change', function(e){
@@ -9572,7 +9514,7 @@ function renderGM(){
     root.addEventListener('click', function(e){
       var t=e.target.closest('[data-gm]'); if(!t) return;
       var a=t.getAttribute('data-gm'), m=t.getAttribute('data-m'), id=t.getAttribute('data-id');
-      if(a==='nueva'){ if(typeof GTS!=='undefined' && GTS && GTS.openNew) GTS.openNew('Garantía'); else gmFormulario(null,null); }
+      if(a==='nueva') gmFormulario(null,null);
       else if(a==='importar') document.getElementById('gm-file').click();
       else if(a==='reporte') grAbrir();
       else if(a.indexOf('gr-')===0) grAccion(a);
@@ -9945,13 +9887,12 @@ function galAlertas(casos, cfg){
     if(c.estado==='Resuelto' && c.fechaEntregado) return;
     var tm=(c.actualizadoAt && c.actualizadoAt.toMillis) ? c.actualizadoAt.toMillis() : 0;
     var creado=c.creadoMs || galDia(c.fechaRecibido) || 0;
-    var asig=c.fechaAsignacion ? Date.parse(c.fechaAsignacion) : 0; if(isNaN(asig)) asig=0;
-    var last=Math.max(creado, asig, c.tomadoMs||0, c.contactoMs||0, c.listoMs||0, tm), m=[];
+    var last=Math.max(creado, c.tomadoMs||0, c.contactoMs||0, c.listoMs||0, tm), m=[];
     function add(k,t,ref){ if(!ref) return; var d=Math.floor((now-ref)/D); if(d>=cfg.aviso) m.push({k:k,t:t,d:d}); }
     if(c.estado!=='Resuelto'){
       if(!c.tecnicoUid) add('sin_tecnico','Nadie ha tomado el caso',creado);
-      else if(!c.contactoCaptura) add('sin_contacto','Pasó el plazo de '+cfg.aviso+' días y el técnico no le ha escrito al cliente (sin comprobante)',c.tomadoMs||asig||creado);
-      add('sin_mov','Pasó el plazo de '+cfg.aviso+' días y el técnico no ha actualizado el caso',last);
+      else if(!c.contactoCaptura) add('sin_contacto','Sin comprobante de contacto con el cliente',c.tomadoMs||creado);
+      add('sin_mov','Sin cambios en el caso',last);
     } else {
       var rs=galDia(c.fechaResuelto) || last;
       if(!(c.listoCapturas && c.listoCapturas.length)) add('sin_aviso','Equipo listo sin comprobante de aviso al cliente',rs);
@@ -10000,7 +9941,7 @@ function galAbrir(){
   var crit=L.filter(function(x){return x.nivel==='critico';}).length;
   galModal('<div class="gal-h"><h3>🔔 Alertas de garantías</h3><button class="btn btn-ghost" data-gal="cerrar">Cerrar</button></div>'+
     '<div class="gal-mut">'+L.length+' caso'+(L.length===1?'':'s')+' con alerta'+(crit?' · '+crit+' crítico'+(crit===1?'':'s'):'')+'. Se revisan casos abiertos y equipos listos sin entregar.</div>'+rows+
-    '<div class="gal-cfg"><label>Plazo del técnico (días)<input type="number" min="1" id="galAviso" value="'+cfg.aviso+'"></label><label>Crítico desde (días)<input type="number" min="1" id="galCritico" value="'+cfg.critico+'"></label>'+
+    '<div class="gal-cfg"><label>Avisar desde (días)<input type="number" min="1" id="galAviso" value="'+cfg.aviso+'"></label><label>Crítico desde (días)<input type="number" min="1" id="galCritico" value="'+cfg.critico+'"></label>'+
     '<label style="flex-direction:row;align-items:center;gap:6px;"><input type="checkbox" id="galActivo"'+(cfg.activo?' checked':'')+'> Alertas activas</label>'+
     '<button class="btn btn-primary" data-gal="guardar">Guardar</button></div>');
 }
@@ -10306,7 +10247,6 @@ function panUsuarios(){ try{ return EV.data.usuarios || []; }catch(e){ return []
    nombre si solo hay una con ese rol). Si no hay persona, queda como histórico inactivo. */
 function panPersona(nombre, rol, us){
   const n = pnorm(nombre); if(!n) return null;
-  try{ const r = nomCanon(nombre, rol); if(r) return {id:r.id, uid:r.uid, name:r.name, active:r.active}; }catch(e){}
   const cand = (us||[]).filter(u=>u.rol===rol);
   let m = cand.find(u=>pnorm(u.nombre)===n);
   if(!m){ const t = n.split(' ')[0]; const igual = cand.filter(u=>pnorm(u.nombre).split(' ')[0]===t); if(igual.length===1) m = igual[0]; }
@@ -10370,8 +10310,7 @@ function panToMesa(c, us){
     marca: PAN_MARCA_NOM[c.marca] || String(c.marca||'').toUpperCase(),
     sucursalId: c.sucursal ? 'br_'+slug(c.sucursal) : '', sucursal: c.sucursal||'',
     cliente:c.cliente||'', telefono:c.telefono||'', equipo:c.equipo||'', serial:c.serial||'', falla:c.falla||'',
-    asesorId, asesorNombre:(function(){ const u = c.asesorUid && us.find(x=>x.id===c.asesorUid); return u ? (u.nombre||c.asesor||'') : (aP ? aP.name : (c.asesor||'')); })(),
-    tecnicoId, tecnicoNombre:(function(){ const u = c.tecnicoUid && us.find(x=>x.id===c.tecnicoUid); return u ? (u.nombre||c.tecnico||'') : (tP ? tP.name : (c.tecnico||'')); })(),
+    asesorId, asesorNombre:c.asesor||'', tecnicoId, tecnicoNombre:c.tecnico||'',
     fechaAsignacion: c.fechaAsignacion || (tecnicoId ? creadoEn : null),
     estado, fechaResolucion, tiempoResolucionHoras:horas,
     observacion:c.observaciones||'', incidencias:Array.isArray(c.incidencias)?c.incidencias:[],
@@ -10622,7 +10561,7 @@ function applyFilters(cases, f, forcedBrand){
     if(f.entrega==='pendiente' && !isPorEntregar(c)) return false;
     if(f.q){
       const q = f.q.toLowerCase();
-      const hay = [c.folio,c.cliente,c.telefono,c.serial,c.equipo,c.asesorNombre,c.tecnicoNombre].join(' ').toLowerCase();
+      const hay = [c.folio,c.cliente,c.telefono,c.serial,c.equipo,c.asesorNombre,c.tecnicoNombre,c.observacion].join(' ').toLowerCase();
       if(!hay.includes(q)) return false;
     }
     return true;
@@ -10821,6 +10760,7 @@ const NAV_MGMT = [
   {id:'tecnicos', label:'Técnicos', ic:'🧑‍🔧'},
   {id:'casos', label:'Casos', ic:'🗂️'},
   {id:'config', label:'Configuración', ic:'⚙️'},
+  {id:'panel', label:'Del panel', ic:'🧾'},
 ];
 const BRAND_FOR_VIEW = {tekio:'TEKIO', infot:'INFOT', mega:'MEGA LAPTOP'};
 
@@ -10852,18 +10792,10 @@ function buildFrame(){
   if(document.getElementById('gts-subtabs')) { updateNavActive(); return; }
   function tab(n){ return '<button class="subtab" data-gts="'+n.id+'">'+n.ic+' '+esc(n.label)+'</button>'; }
   view.innerHTML =
-    '<div class="gts-actions" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 12px;">'+
-      '<button class="btn btn-primary" data-gts-new="Garantía">🛡️ Nueva garantía</button>'+
-      '<button class="btn btn-primary" data-gts-new="Servicio Técnico">🔧 Nuevo servicio técnico</button>'+
-      '<span style="font-size:11.5px;color:var(--text-mute);">Pega el texto de WhatsApp, se detecta solo y lo asignas a un técnico — igual que en el Panel de Asesores.</span>'+
-    '</div>'+
     '<div class="subtabs gts-subtabs" id="gts-subtabs">'+NAV_MAIN.map(tab).join('')+'<span class="gts-sep"></span>'+NAV_MGMT.map(tab).join('')+'</div>'+
     '<div class="gts" id="gts-app"></div><div id="gm-root" style="display:none;"></div>';
   view.querySelectorAll('[data-gts]').forEach(el=>{
     el.addEventListener('click', ()=>{ App.view = el.dataset.gts; render(); });
-  });
-  view.querySelectorAll('[data-gts-new]').forEach(el=>{
-    el.addEventListener('click', ()=>{ ensureRoots(); openNewCaseModal(el.dataset.gtsNew); });
   });
   updateNavActive();
 }
@@ -11284,7 +11216,7 @@ function renderCasesTable(list, cfg, opts){
   const cols = [
     ['folio','ID'], ['fecha','Fecha'], ['tipo','Tipo'], ['marca','Marca'], ['sucursal','Sucursal'], ['cliente','Cliente'],
     ['equipo','Equipo'], ['serial','Serial'], ['falla','Falla'], ['asesorNombre','Asesor'], ['tecnicoNombre','Técnico'],
-    ['estado','Estado'], ['fechaResolucion','F. Resolución'], ['tiempoResolucionHoras','T. Resolución'], ['entregado','Entrega']
+    ['estado','Estado'], ['observacion','Observación del técnico'], ['fechaResolucion','F. Resolución'], ['tiempoResolucionHoras','T. Resolución'], ['entregado','Entrega']
   ];
   return `
   <div class="tbl-wrap">
@@ -11308,6 +11240,7 @@ function renderCasesTable(list, cfg, opts){
           <td>${esc(c.asesorNombre)}</td>
           <td>${esc(c.tecnicoNombre||'Sin asignar')}</td>
           <td><span class="badge ${ESTADO_CLASS[c.estado]}">${c.estado}</span></td>
+          <td title="${esc(c.observacion||'')}" style="min-width:230px; max-width:340px; white-space:normal; font-size:12px; line-height:1.35;">${c.observacion ? esc(c.observacion.length>140 ? c.observacion.slice(0,140)+'…' : c.observacion) : '<span style="color:var(--text-faint);">Sin observación</span>'}</td>
           <td class="tabular">${c.fechaResolucion?fmtDateShort(c.fechaResolucion):'—'}</td>
           <td class="tabular">${fmtDuration(c.tiempoResolucionHoras)}</td>
           <td>${isEntregado(c)?'<span class="badge entregado">📦 Sí</span>':(isPorEntregar(c)?'<span class="badge por-entregar">📦 No</span>':'—')}</td>
@@ -11340,37 +11273,6 @@ function renderCasosView(allCases, cfg){
 /* =====================================================================
    CONFIGURACIÓN
 ===================================================================== */
-/* Nombres repetidos: muestra lo que se unió solo y deja unir a mano lo que quedó con duda. */
-function renderNombresPanel(){
-  const bloques = [['tecnico','🧑‍🔧 Técnicos'],['asesor','🎧 Asesores']].map(([rol,tit])=>{
-    const grupos = ncGet(rol).grupos;
-    const unidos = grupos.filter(g=>g.variantes.length>1);
-    const alias = ncAliasMap(rol);
-    const crudos = [...new Set(grupos.reduce((a,g)=>a.concat(g.variantes),[]))].sort((a,b)=>a.localeCompare(b));
-    const oficiales = grupos.map(g=>g.rep.name).sort((a,b)=>a.localeCompare(b));
-    const manual = Object.keys(alias);
-    const opts = l=>'<option value="">Elige…</option>'+l.map(n=>'<option value="'+esc(n)+'">'+esc(n)+'</option>').join('');
-    return '<div style="margin-top:14px;"><div style="font-weight:700;margin-bottom:6px;">'+tit+'</div>'+
-      (unidos.length ? unidos.map(g=>'<div class="cfg-row"><span class="nm">✔ '+esc(g.rep.name)+'</span><span class="tag">'+g.variantes.filter(v=>v!==g.rep.name).map(esc).join(' · ')+'</span></div>').join('')
-                     : '<div class="hint">No hay nombres repetidos.</div>')+
-      '<div class="formgrid" style="margin-top:8px;align-items:end;">'+
-        '<label class="field">Este nombre<select id="nc-a-'+rol+'">'+opts(crudos)+'</select></label>'+
-        '<label class="field">es la misma persona que<select id="nc-b-'+rol+'">'+opts(oficiales)+'</select></label>'+
-        '<button class="btn primary sm" data-nc-unir="'+rol+'">Unir nombres</button>'+
-      '</div>'+
-      (manual.length ? '<div class="hint" style="margin-top:8px;">Uniones hechas a mano:</div>'+manual.map(k=>'<div class="cfg-row"><span class="nm">'+esc(k)+' → '+esc(alias[k])+'</span><span class="tag" style="cursor:pointer;" data-nc-undo="'+rol+'" data-k="'+esc(k)+'">Deshacer ✕</span></div>').join('') : '')+
-    '</div>';
-  }).join('');
-  return `
-  <div class="block">
-    <div class="panel">
-      <div class="panel-title">🧹 Nombres repetidos (técnicos y asesores)</div>
-      <div class="panel-sub">Cuando una misma persona aparece escrita de varias formas ("Cristian", "Cristian Soto"), se junta sola en una. Aquí ves lo que se unió y puedes unir a mano lo que quedó con duda. No se borra ni se cambia ningún caso: solo cambia cómo se agrupan en las listas y reportes.</div>
-      ${bloques}
-    </div>
-  </div>
-`;
-}
 function renderConfigView(cfg){
   return `
   <div class="block">
@@ -11390,18 +11292,15 @@ function renderConfigView(cfg){
       <div class="addrow" style="margin-top:12px;"><input type="text" id="new-inc" placeholder="Nuevo tipo de incidencia"><button class="btn primary sm" id="add-inc">Agregar</button></div>
     </div>
   </div>
-  ${renderNombresPanel()}
   <div class="block">
     <div class="panel">
       <div class="panel-title">📄 Reporte ejecutivo (HTML con gráficas)</div>
-      <div class="panel-sub">Genera un reporte descargable, autocontenido (funciona sin conexión), con KPIs, gráficas, desempeño por técnico, casos con plazo de seguimiento vencido y el detalle completo del período que elijas. Solo administración tiene acceso a esta opción.</div>
+      <div class="panel-sub">Genera un reporte descargable, autocontenido (funciona sin conexión), con KPIs, gráficas y el detalle completo del período que elijas. Solo administración tiene acceso a esta opción.</div>
       <div class="formgrid" style="margin-top:6px;">
-        <label class="field">Período<select id="rep-per"><option value="todo">Todo el historial</option><option value="mes">Este mes</option><option value="mesant">Mes anterior</option><option value="30d">Últimos 30 días</option><option value="rango">Rango personalizado</option></select></label>
         <label class="field">Desde<input type="date" id="rep-from"></label>
         <label class="field">Hasta<input type="date" id="rep-to" value="${todayISO()}"></label>
-        <div class="field">Marcas<div id="rep-marcas" style="display:flex;gap:14px;flex-wrap:wrap;padding-top:6px;">${BRANDS.map(b=>'<label style="display:flex;gap:6px;align-items:center;font-size:12.5px;cursor:pointer;"><input type="checkbox" class="rep-m" value="'+b+'" checked style="width:auto;"> '+BRAND_LABEL[b]+'</label>').join('')}</div></div>
+        <label class="field">Marca<select id="rep-marca"><option value="">Todas las marcas</option>${BRANDS.map(b=>'<option value="'+b+'">'+BRAND_LABEL[b]+'</option>').join('')}</select></label>
         <label class="field">Tipo<select id="rep-tipo"><option value="">Garantías + Servicio técnico</option>${TIPOS_CASO.map(t=>'<option value="'+esc(t)+'">'+TIPO_ICON[t]+' '+esc(t)+'</option>').join('')}</select></label>
-        <label class="field">Técnico<select id="rep-tec"><option value="">Todos los técnicos</option>${cfg.technicians.filter(t=>t.active).map(t=>'<option value="'+esc(t.id)+'">'+esc(t.name)+'</option>').join('')}</select></label>
       </div>
       <button class="btn primary sm" id="btn-generate-report" style="margin-top:12px;">📄 Generar y descargar reporte</button>
       <div class="hint">Si dejas "Desde" vacío, se incluyen todos los casos desde el primero registrado.</div>
@@ -11451,54 +11350,24 @@ function wireCurrentView(cases, cfg){
   const js = document.getElementById('btn-export-json');
   if(js) js.addEventListener('click', ()=> exportJson());
 
-
-  document.querySelectorAll('[data-nc-unir]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      if(!canWrite()){ toast('Solo lectura: inicia sesión como editor','🔒'); return; }
-      const rol = btn.dataset.ncUnir;
-      const a = document.getElementById('nc-a-'+rol).value, b = document.getElementById('nc-b-'+rol).value;
-      if(!a || !b){ toast('Elige los dos nombres','⚠️'); return; }
-      if(claveAsesor(a)===claveAsesor(b)){ toast('Esos dos ya se cuentan como la misma persona','ℹ️'); return; }
-      ncSetAlias(rol, a, b); Store.refresh(); renderAdminView(); toast('Nombres unidos');
-    });
-  });
-  document.querySelectorAll('[data-nc-undo]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      if(!canWrite()){ toast('Solo lectura: inicia sesión como editor','🔒'); return; }
-      ncQuitarAlias(el.dataset.ncUndo, el.dataset.k); Store.refresh(); renderAdminView(); toast('Unión deshecha');
-    });
-  });
-
   const genRep = document.getElementById('btn-generate-report');
-  if(genRep){
-    const isoL = d=> d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-    const per = document.getElementById('rep-per'), fEl = document.getElementById('rep-from'), tEl = document.getElementById('rep-to');
-    per.addEventListener('change', ()=>{
-      const h = new Date(), v = per.value;
-      if(v==='todo'){ fEl.value=''; tEl.value=todayISO(); }
-      else if(v==='mes'){ fEl.value=isoL(new Date(h.getFullYear(),h.getMonth(),1)); tEl.value=todayISO(); }
-      else if(v==='mesant'){ fEl.value=isoL(new Date(h.getFullYear(),h.getMonth()-1,1)); tEl.value=isoL(new Date(h.getFullYear(),h.getMonth(),0)); }
-      else if(v==='30d'){ fEl.value=isoL(new Date(h.getFullYear(),h.getMonth(),h.getDate()-29)); tEl.value=todayISO(); }
-    });
-    [fEl,tEl].forEach(el=> el.addEventListener('change', ()=>{ per.value='rango'; }));
-    genRep.addEventListener('click', async ()=>{
-      const from = fEl.value, to = tEl.value;
-      const marca = [...document.querySelectorAll('#rep-marcas .rep-m:checked')].map(x=>x.value);
-      if(!marca.length){ toast('Elige al menos una marca','⚠️'); return; }
-      const tipo = document.getElementById('rep-tipo').value;
-      const tec = document.getElementById('rep-tec').value;
-      if(from && to && from > to){ toast('La fecha "Desde" no puede ser posterior a "Hasta"','⚠️'); return; }
-      genRep.disabled = true; genRep.textContent = 'Generando…';
-      try{
-        const html = buildReportHtml(from, to, marca, cfg, Store.getCases(), tipo, tec);
-        await saveFile('reporte_garantias_'+(from||'inicio')+'_a_'+(to||todayISO())+'.html', html);
-      } catch(e){
-        toast('No se pudo generar el reporte: '+e.message, '⚠️');
-      } finally {
-        genRep.disabled = false; genRep.textContent = '📄 Generar y descargar reporte';
-      }
-    });
-  }
+  if(genRep) genRep.addEventListener('click', async ()=>{
+    const from = document.getElementById('rep-from').value;
+    const to = document.getElementById('rep-to').value;
+    const marca = document.getElementById('rep-marca').value;
+    const tipo = document.getElementById('rep-tipo').value;
+    if(from && to && from > to){ toast('La fecha "Desde" no puede ser posterior a "Hasta"','⚠️'); return; }
+    genRep.disabled = true; genRep.textContent = 'Generando…';
+    try{
+      const html = buildReportHtml(from, to, marca, cfg, Store.getCases(), tipo);
+      const suffix = (from||'inicio')+'_a_'+(to||todayISO());
+      await saveFile('reporte_garantias_'+suffix+'.html', html);
+    } catch(e){
+      toast('No se pudo generar el reporte: '+e.message, '⚠️');
+    } finally {
+      genRep.disabled = false; genRep.textContent = '📄 Generar y descargar reporte';
+    }
+  });
 
   // configuración
   const addTech = document.getElementById('add-tech');
@@ -11722,17 +11591,12 @@ function rangeMonthlyBuckets(list, fromStr, toStr){
   return buckets;
 }
 
-function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilter, tecnicoFilter){
-  /* marcaFilter puede ser una marca, varias (ej. Tekio e Infot) o vacío/todas. */
-  const marcasSel = Array.isArray(marcaFilter) ? marcaFilter.filter(Boolean) : (marcaFilter ? [marcaFilter] : []);
-  const todasMarcas = marcasSel.length===0 || marcasSel.length>=BRANDS.length;
-  const variasMarcas = todasMarcas || marcasSel.length>1;
+function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilter){
   const filtered = allCases.filter(c=>{
     if(fromDate && c.fecha < fromDate) return false;
     if(toDate && c.fecha > toDate) return false;
-    if(!todasMarcas && marcasSel.indexOf(c.marca)===-1) return false;
+    if(marcaFilter && c.marca !== marcaFilter) return false;
     if(tipoFilter && tipoOf(c) !== tipoFilter) return false;
-    if(tecnicoFilter && c.tecnicoId !== tecnicoFilter) return false;
     return true;
   }).sort((a,b)=> a.fecha < b.fecha ? 1 : (a.fecha > b.fecha ? -1 : 0));
 
@@ -11757,7 +11621,7 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
   const techs = (cfg.technicians||[]).filter(t=>t.active);
   const techMetrics = techs.map(t=>({t, m: computeTechMetrics(filtered, t.id)}));
 
-  const brandRows = !variasMarcas ? [] : (todasMarcas ? BRANDS : marcasSel).map(b=>{
+  const brandRows = marcaFilter ? [] : BRANDS.map(b=>{
     const list = filtered.filter(c=>c.marca===b);
     const kb = computeKpis(list);
     return {label: BRAND_LABEL[b], total:kb.total, resueltos:kb.resueltos, pctResolucion:kb.pctResolucion,
@@ -11772,16 +11636,6 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
       origTecnico: orig?(orig.tecnicoNombre||'Sin asignar'):'—'};
   });
 
-  /* Plazo de seguimiento: casos de este reporte que hoy superan el plazo del técnico sin escribirle
-     al cliente o sin actualizar el caso (misma regla que la campana de alertas). */
-  let plazoRows = [], plazoDias = 2;
-  try{
-    plazoDias = galCfg().aviso;
-    const idsF = new Set(filtered.map(c=>c.id));
-    plazoRows = galAlertas(panCasos(), galCfg()).filter(x=>idsF.has(x.c.id));
-  }catch(e){ plazoRows = []; }
-  const tecFiltObj = tecnicoFilter ? (cfg.technicians||[]).find(t=>t.id===tecnicoFilter) : null;
-
   const casesRows = filtered.map(c=>({
     folio:c.folio||c.id, tipo:TIPO_ICON[tipoOf(c)]+' '+tipoOf(c), fecha:fmtDateShort(c.fecha), marca:BRAND_LABEL[c.marca]||c.marca, sucursal:c.sucursal||'—',
     cliente:c.cliente||'—', equipo:c.equipo||'—', serial:c.serial||'—', falla:c.falla||'—', asesor:c.asesorNombre||'—',
@@ -11789,15 +11643,15 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
     tiempoResolucion: fmtDuration(c.tiempoResolucionHoras),
     entrega: isEntregado(c) ? ('📦 Sí — '+(c.fechaEntrega?fmtDateShort(c.fechaEntrega):'')) : (isPorEntregar(c)?'📦 No':'—'),
     incidencias:(c.incidencias||[]).join(', ')||'—',
+    observacion: c.observacion || '—',
     reincidencia: c.reincidenciaDe ? c.reincidenciaDe : ''
   }));
 
   const REPORT_DATA = {
     meta:{
       fromLabel: fmtDateShort(effFrom+'T00:00:00'), toLabel: fmtDateShort(effTo+'T00:00:00'),
-      marcaLabel: todasMarcas ? 'Todas las marcas' : marcasSel.map(b=>BRAND_LABEL[b]).join(' + '),
+      marcaLabel: marcaFilter ? BRAND_LABEL[marcaFilter] : 'Todas las marcas',
       tipoLabel: tipoFilter ? (TIPO_ICON[tipoFilter]+' '+tipoFilter) : 'Garantías + Servicio técnico',
-      tecnicoLabel: tecFiltObj ? ('Técnico: '+tecFiltObj.name) : '',
       generatedAt: fmtDateTime(nowIso()),
     },
     kpi:{
@@ -11808,7 +11662,7 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
       garantias:k.garantias, servicios:k.servicios, porEntregar:k.porEntregar,
     },
     estado:{ labels:Object.keys(k.porEstado), values:Object.values(k.porEstado), colors:Object.keys(k.porEstado).map(e=>ESTADO_COLOR[e]) },
-    marca: !variasMarcas ? null : { labels: porMarca.map(x=>x[0]), values: porMarca.map(x=>x[1]) },
+    marca: marcaFilter ? null : { labels: porMarca.map(x=>x[0]), values: porMarca.map(x=>x[1]) },
     tipo: tipoFilter ? null : { labels: porTipo.map(x=>x[0]), values: porTipo.map(x=>x[1]) },
     sucursal:{ labels: porSucursal.map(x=>x[0]), values: porSucursal.map(x=>x[1]) },
     tecnico:{ labels: porTecnico.map(x=>x[0]), values: porTecnico.map(x=>x[1]) },
@@ -11833,7 +11687,6 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
     kpiCard('','Con incidencias', k.conIncidencias, k.pctIncidencias+'% de los casos'),
     kpiCard('','🔁 Reincidencias', k.reincidencias, k.pctReincidencia+'% — equipos que volvieron'),
     kpiCard('','📦 Por entregar', k.porEntregar, 'resueltos sin retirar aún'),
-    kpiCard('accent-y','⏰ Plazo vencido', plazoRows.length, 'más de '+plazoDias+' días sin atención del técnico'),
   ].join('');
 
   const brandTableHtml = brandRows.length ? (
@@ -11852,14 +11705,6 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
     '</tbody></table></div><div class="hint">Evita conclusiones automáticas: un técnico con más casos puede haber recibido más asignaciones, y una reincidencia no siempre implica una reparación mal hecha.</div></div>'
   ) : '<div class="hint">No hay técnicos activos configurados.</div>';
 
-  const plazoHtml = plazoRows.length ? (
-    '<div class="panel"><div class="panel-title">⏰ Casos con plazo de seguimiento vencido</div><div class="tbl-wrap"><table class="rtbl"><thead><tr>'+
-    '<th>Caso</th><th>Cliente</th><th>Marca</th><th>Técnico</th><th>Nivel</th><th>Días</th><th>Motivo</th>'+
-    '</tr></thead><tbody>'+
-    plazoRows.map(x=> '<tr><td class="mono">'+esc(x.c.folio||x.c.id)+'</td><td>'+esc(x.c.cliente||'—')+'</td><td>'+esc(evMarcaNombre(x.c.marca))+'</td><td>'+esc(x.c.tecnico||'Sin asignar')+'</td><td>'+(x.nivel==='critico'?'🔴 Crítico':'🟡 Aviso')+'</td><td class="num">'+x.d+'</td><td>'+x.m.map(y=>esc(y.t)).join('<br>')+'</td></tr>').join('')+
-    '</tbody></table></div><div class="hint">Situación al momento de generar el reporte: el técnico tiene '+plazoDias+' días para escribirle al cliente y actualizar el caso.</div></div>'
-  ) : '<div class="hint">✅ Ningún caso de este reporte supera el plazo de '+plazoDias+' días sin atención.</div>';
-
   const reincHtml = reincRows.length ? (
     '<div class="panel"><div class="panel-title">🔁 Reincidencias en el período</div><div class="tbl-wrap"><table class="rtbl"><thead><tr>'+
     '<th>Caso</th><th>Cliente</th><th>Equipo</th><th>Fecha</th><th>Estado</th><th>Caso original</th><th>Fecha original</th><th>Técnico original</th>'+
@@ -11868,7 +11713,7 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
     '</tbody></table></div></div>'
   ) : '<div class="hint">No se registraron reincidencias en este período.</div>';
 
-  const casesCols = [['folio','ID'],['tipo','Tipo'],['fecha','Fecha'],['marca','Marca'],['sucursal','Sucursal'],['cliente','Cliente'],['equipo','Equipo'],['serial','Serial'],['falla','Falla'],['asesor','Asesor'],['tecnico','Técnico'],['estado','Estado'],['fechaResolucion','F. Resolución'],['tiempoResolucion','T. Resolución'],['entrega','Entrega'],['incidencias','Incidencias'],['reincidencia','Reincidencia de']];
+  const casesCols = [['folio','ID'],['tipo','Tipo'],['fecha','Fecha'],['marca','Marca'],['sucursal','Sucursal'],['cliente','Cliente'],['equipo','Equipo'],['serial','Serial'],['falla','Falla'],['asesor','Asesor'],['tecnico','Técnico'],['estado','Estado'],['observacion','Observación del técnico'],['fechaResolucion','F. Resolución'],['tiempoResolucion','T. Resolución'],['entrega','Entrega'],['incidencias','Incidencias'],['reincidencia','Reincidencia de']];
   const casesTableHtml = casesRows.length ? (
     '<div class="tbl-wrap"><table class="rtbl"><thead><tr>'+casesCols.map(cc=>'<th>'+cc[1]+'</th>').join('')+'</tr></thead><tbody>'+
     casesRows.map(r=> '<tr>'+casesCols.map(cc=> '<td'+((cc[0]==='fecha'||cc[0]==='fechaResolucion'||cc[0]==='tiempoResolucion')?' class="num"':((cc[0]==='folio'||cc[0]==='serial'||cc[0]==='reincidencia')?' class="mono"':''))+'>'+esc(r[cc[0]])+'</td>').join('')+'</tr>').join('')+
@@ -11941,7 +11786,7 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
   '.hint{font-size:11.5px;color:var(--text-faint);margin-top:8px;}.foot{margin-top:40px;text-align:center;color:var(--text-faint);font-size:11.5px;}'+
   '</style></head><body><div class="wrap">'+
   '<div class="hero"><div class="eyebrow">✦ Reporte ejecutivo</div><h1>🛠️ Mesa de Garantías — Tekio · Infot · Mega Laptop</h1>'+
-  '<div class="sub">Período: <b>'+esc(REPORT_DATA.meta.fromLabel)+'</b> — <b>'+esc(REPORT_DATA.meta.toLabel)+'</b> · '+esc(REPORT_DATA.meta.marcaLabel)+' · '+esc(REPORT_DATA.meta.tipoLabel)+(REPORT_DATA.meta.tecnicoLabel?' · '+esc(REPORT_DATA.meta.tecnicoLabel):'')+' · Generado el '+esc(REPORT_DATA.meta.generatedAt)+'</div>'+
+  '<div class="sub">Período: <b>'+esc(REPORT_DATA.meta.fromLabel)+'</b> — <b>'+esc(REPORT_DATA.meta.toLabel)+'</b> · '+esc(REPORT_DATA.meta.marcaLabel)+' · '+esc(REPORT_DATA.meta.tipoLabel)+' · Generado el '+esc(REPORT_DATA.meta.generatedAt)+'</div>'+
   '<div class="pills"><span class="pill">🗂️ '+k.total+' registro'+(k.total===1?'':'s')+'</span><span class="pill">✅ '+k.pctResolucion+'% resueltas</span><span class="pill">⏱️ '+esc(fmtDuration(k.tiempoProm))+' promedio</span></div></div>'+
   '<div class="block"><div class="block-title">Resumen general</div><div class="kpi-grid">'+kpiHtml+'</div></div>'+
   (brandTableHtml? ('<div class="block">'+brandTableHtml+'</div>') : '')+
@@ -11960,7 +11805,6 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
   '</div></div>'+
   '<div class="block"><div class="panel"><div class="panel-title">⚠️ Tipos de incidencia</div><div class="chart-box"><canvas id="ch-incidencia"></canvas></div>'+(porIncidencia.length===0?'<div class="hint">✅ No hay incidencias registradas en este período.</div>':'')+'</div></div>'+
   (techMetrics.length? ('<div class="block"><div class="block-title">Desempeño técnico</div><div class="panel" style="margin-bottom:16px;"><div class="panel-title">📦 Comparativa visual</div><div class="chart-box" style="height:280px;"><canvas id="ch-techcompare"></canvas></div></div>'+techTableHtml+'</div>') : '')+
-  '<div class="block"><div class="block-title">⏰ Seguimiento del técnico</div>'+plazoHtml+'</div>'+
   '<div class="block"><div class="block-title">🔁 Reincidencias</div>'+reincHtml+'</div>'+
   '<div class="block"><div class="block-title">Todos los casos del período ('+casesRows.length+')</div>'+casesTableHtml+'</div>'+
   '<div class="foot">Generado automáticamente por Mesa de Garantías el '+esc(REPORT_DATA.meta.generatedAt)+'.</div>'+
@@ -12019,6 +11863,7 @@ function openCaseModal(caseId){
     <div class="modal-body">
       ${c.reincidenciaDe ? `<div class="insight" style="margin-bottom:14px;">🔁 <span>Reincidencia — este caso vuelve por lo mismo que ${origCase?('<a href="#" data-open-case="'+esc(origCase.id)+'"><b>'+esc(origCase.folio||origCase.id)+'</b></a>'):('<b>'+esc(c.reincidenciaDe)+'</b>')}</span></div>` : ''}
       ${returnedAs.length ? `<div class="insight" style="margin-bottom:14px;">↩️ <span>Este equipo volvió después como: ${returnedAs.map(x=>'<a href="#" data-open-case="'+esc(x.id)+'"><b>'+esc(x.folio||x.id)+'</b></a>').join(', ')}</span></div>` : ''}
+      <div class="insight" style="margin-bottom:14px;">📝 <span style="white-space:pre-wrap;"><b>Observación del técnico:</b> ${c.observacion ? esc(c.observacion) : '<i>Aún no hay ninguna observación registrada.</i>'}</span></div>
       <div class="detail-grid">
         <div class="detail-item"><div class="l">Marca</div><div class="v">${esc(BRAND_LABEL[c.marca]||c.marca)}</div></div>
         <div class="detail-item"><div class="l">Sucursal</div><div class="v">${esc(c.sucursal||'—')}</div></div>
@@ -12083,7 +11928,6 @@ function openCaseModal(caseId){
           <button class="btn primary sm" id="btn-save-case">Guardar cambios</button>
           <button class="btn yellow sm" id="btn-mark-pending">Marcar como pendiente</button>
           <button class="btn blue sm" id="btn-mark-resolved">Marcar como resuelto</button>
-          <button class="btn ghost sm" id="btn-comprobantes">📸 Comprobantes de contacto</button>
           ${!isEntregado(c)?'<button class="btn green sm" id="btn-mark-delivered">📦 Marcar como entregado</button>':''}
           ${isAdmin?`<span style="flex:1;"></span><button class="btn danger sm" id="btn-delete-case">🗑️ Eliminar caso</button>`:''}
         </div>
@@ -12104,9 +11948,6 @@ function openCaseModal(caseId){
   document.querySelectorAll('#modal-root a[data-open-case]').forEach(a=>{
     a.addEventListener('click', (e)=>{ e.preventDefault(); openCaseModal(a.dataset.openCase); });
   });
-
-  const btnComp = document.getElementById('btn-comprobantes');
-  if(btnComp) btnComp.addEventListener('click', ()=> gmVerComprobantes(c.id));
 
   const incBox = document.getElementById('edit-incidencias');
   if(incBox) incBox.querySelectorAll('[data-inc-chip]').forEach(ch=>{
@@ -12212,15 +12053,15 @@ function openNewCaseModal(initialTipo){
         <label class="field">Equipo (marca y modelo)<input type="text" id="nc-equipo" placeholder="Ej. Dell Latitude 5590 i5 8th 8GB 128GB"></label>
         <label class="field">Serial<input type="text" id="nc-serial" placeholder="Ej. H70LSQ2"></label>
         <label class="field">Falla presentada<input type="text" id="nc-falla" placeholder="Ej. BACKLIGHT"></label>
-        <label class="field">Recibido por (asesor)<input type="text" id="nc-asesor" list="dl-asesores" value="${id.role==='asesor'?esc(id.name):''}" placeholder="Quién recibió el equipo" ${id.role==='asesor'?'readonly':''}><datalist id="dl-asesores">${cfg.advisors.filter(a=>a.active).map(a=>'<option value="'+esc(a.name)+'">').join('')}</datalist></label>
-        <label class="field">Asignar a técnico<select id="nc-tecnico"><option value="">Sin asignar aún</option>${cfg.technicians.filter(t=>t.active).map(t=>'<option value="'+t.id+'">'+esc(t.name)+'</option>').join('')}</select></label>
+        <label class="field">Recibido por (asesor)<input type="text" id="nc-asesor" value="${esc(id.name)}" ${id.role==='asesor'?'readonly':''}></label>
+        <label class="field">Técnico responsable (opcional)<select id="nc-tecnico"><option value="">Sin asignar aún</option>${cfg.technicians.filter(t=>t.active).map(t=>'<option value="'+t.id+'">'+esc(t.name)+'</option>').join('')}</select></label>
         <label class="field full">🔁 ¿Es un caso que ya había venido antes por la misma falla? (opcional)
           <input type="text" id="nc-reinc" list="dl-prev-cases" placeholder="Folio, cliente o serial del caso anterior…">
           <datalist id="dl-prev-cases">${Store.getCases().map(c=>'<option value="'+esc(c.folio||c.id)+'">'+esc(c.cliente)+' — '+esc(c.equipo)+' ('+esc(c.estado)+')</option>').join('')}</datalist>
         </label>
         <div class="hint" id="reinc-hint" style="margin-top:-6px;"></div>
       </div>
-      <div class="hint" style="margin-top:10px;">El caso se guardará con estado <b>Pendiente</b>. Podrás actualizarlo cuando conozcas su resolución. El técnico tiene <b>${(function(){ try{ return galCfg().aviso; }catch(e){ return 2; } })()} días</b> para escribirle al cliente y actualizar el caso; si no lo hace, te llega una alerta.</div>
+      <div class="hint" style="margin-top:10px;">El caso se guardará con estado <b>Pendiente</b>. Podrás actualizarlo cuando conozcas su resolución.</div>
     </div>
     <div class="modal-foot">
       <button class="btn ghost" id="btn-cancel-new">Cancelar</button>
@@ -12289,12 +12130,7 @@ function openNewCaseModal(initialTipo){
     if(p.equipo) document.getElementById('nc-equipo').value = p.equipo;
     if(p.serial) document.getElementById('nc-serial').value = p.serial;
     if(p.falla) document.getElementById('nc-falla').value = p.falla;
-    if(p.asesorNombre){
-      // une el nombre escrito con la persona real de Equipo (evita asesores duplicados por abreviaciones)
-      let nomA = p.asesorNombre;
-      try{ const per = panPersona(p.asesorNombre,'asesor',panUsuarios()); if(per) nomA = per.name; }catch(e){}
-      document.getElementById('nc-asesor').value = nomA;
-    }
+    if(p.asesorNombre) document.getElementById('nc-asesor').value = p.asesorNombre;
     if(p.tipoGuess && p.tipoGuess !== currentTipo){ setTipo(p.tipoGuess, {notify:true}); }
     if(p.marcaGuess){
       document.getElementById('nc-marca').value = p.marcaGuess;
@@ -12308,11 +12144,6 @@ function openNewCaseModal(initialTipo){
     document.getElementById('detect-hint').textContent = '✓ '+found+' campo(s) detectado(s). Revisa y corrige antes de guardar.';
   });
 
-  // al pegar el texto se detecta solo, sin tener que presionar el botón
-  document.getElementById('paste-report').addEventListener('paste', ()=>{
-    setTimeout(()=>{ const b = document.getElementById('btn-detect'); if(b) b.click(); }, 60);
-  });
-
   document.getElementById('btn-cancel-new').addEventListener('click', closeModal);
   document.getElementById('btn-save-new').addEventListener('click', async ()=>{
     const marca = document.getElementById('nc-marca').value;
@@ -12323,11 +12154,10 @@ function openNewCaseModal(initialTipo){
     if(!marca || !sucursalId || !cliente || !falla){
       toast('Completa al menos marca, sucursal, cliente y falla','⚠️'); return;
     }
-    if(!document.getElementById('nc-tecnico').value && !confirm('No elegiste técnico. El técnico solo ve los casos que se le asignan, así que nadie lo verá en su pantalla hasta que lo asignes.\n\n¿Guardar sin técnico?')) return;
     const branch = cfg.branches.find(b=>b.id===sucursalId);
     const techId = document.getElementById('nc-tecnico').value;
     const techObj = cfg.technicians.find(t=>t.id===techId);
-    const asesorNombre = document.getElementById('nc-asesor').value.trim() || (id.role==='asesor' ? id.name : '');
+    const asesorNombre = document.getElementById('nc-asesor').value.trim() || id.name;
     const fecha = document.getElementById('nc-fecha').value || todayISO();
     const reincidenciaDe = document.getElementById('nc-reinc').value.trim();
 
@@ -12394,7 +12224,7 @@ function mount(){
     }, 2000);
   }
 }
-return { mount: mount, refresh: function(){ try{ Store.refresh(); }catch(e){} }, openNew: function(t){ ensureRoots(); openNewCaseModal(t); } };
+return { mount: mount, refresh: function(){ try{ Store.refresh(); }catch(e){} } };
 
 })(Store, (typeof REPV2_CHARTJS_SRC==="string" ? REPV2_CHARTJS_SRC : ""));
 
