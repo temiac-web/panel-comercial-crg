@@ -86,7 +86,7 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--vio);outline-off
 <script>
 (function(){
 "use strict";
-var VERSION='v4 · 21-oct';
+var VERSION='v5 · 27-oct';
 function errBar(t){try{var b=document.getElementById('errbar');if(!b){b=document.createElement('div');b.id='errbar';b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99;background:#F87171;color:#1A0A0A;font:13px/1.4 sans-serif;padding:8px 12px;word-break:break-word';document.body.appendChild(b);}b.textContent='Error del panel ('+VERSION+'): '+t;}catch(x){}}
 window.addEventListener('error',function(e){errBar((e.message||'desconocido')+(e.lineno?' [línea '+e.lineno+']':''));});
 window.addEventListener('unhandledrejection',function(e){errBar(String((e.reason&&e.reason.message)||e.reason||'promesa rechazada'));});
@@ -130,6 +130,7 @@ function errMsg(e){var c=e&&e.code||'';
   return (e&&e.message)||'Ocurrió un error.';}
 
 /* ====== estado ====== */
+var A=window.A={};
 var S={user:null,perfil:null,role:null,view:null,data:{},unsubs:{},cache:{},msg:null,ready:false,authErr:''};
 var _rt=null;
 function softRender(){
@@ -736,7 +737,7 @@ function vPersonas(){
 }
 
 /* ====== acciones (expuestas al HTML) ====== */
-var A=window.A={};
+/* A se crea al inicio del script */
 A.go=go;
 A.out=function(){S.authErr='';auth.signOut();};
 A.login=function(){
