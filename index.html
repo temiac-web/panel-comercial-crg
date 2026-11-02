@@ -6267,7 +6267,7 @@ function repFiltrar(ventas, desde, hasta, filtros){
     if(hasta && v.fecha > hasta) return false;
     if(filtros.sucursal && v.sucursal !== filtros.sucursal) return false;
     if(filtros.asesor && v.asesor !== filtros.asesor) return false;
-    if(filtros.producto && v.producto !== filtros.producto) return false;
+    if(filtros.producto && canonProducto(v.producto) !== filtros.producto) return false;
     if(filtros.canal && v.canal !== filtros.canal) return false;
     return true;
   });
@@ -6383,8 +6383,8 @@ function repMejorPeorDia(evolucion){
    inventar), así que esa sección se marca aparte como N/D en el armado del reporte. */
 function repTopProductos(ventas, limite){
   limite = limite || 10;
-  var porUnidades = repOrdenar2(repFilas(repAgrupar(ventas, function(v){return v.producto||'Sin producto';})), 'unidades').slice(0, limite);
-  var porVentas = repOrdenar2(repFilas(repAgrupar(ventas, function(v){return v.producto||'Sin producto';})), 'total').slice(0, limite);
+  var porUnidades = repOrdenar2(repFilas(repAgrupar(ventas, function(v){return canonProducto(v.producto)||'Sin producto';})), 'unidades').slice(0, limite);
+  var porVentas = repOrdenar2(repFilas(repAgrupar(ventas, function(v){return canonProducto(v.producto)||'Sin producto';})), 'total').slice(0, limite);
   return {porUnidades:porUnidades, porVentas:porVentas};
 }
 function repOrdenar2(filas, campo){ return filas.slice().sort(function(a,b){ return b[campo]-a[campo]; }); }
@@ -6663,7 +6663,7 @@ function repConstruirComparativo(cfg){
     out.ventasA = vAa; out.ventasB = vBa;
     out.resumen = repCompararConjuntos(vAa, vBa);
     out.porCanal = repCompararPorEntidad(vAa, vBa, function(v){return repCanalLabel(v.canal);});
-    out.porProducto = repCompararPorEntidad(vAa, vBa, function(v){return v.producto||'Sin producto';});
+    out.porProducto = repCompararPorEntidad(vAa, vBa, function(v){return canonProducto(v.producto)||'Sin producto';});
   } else if(cmp.eje==='canal-canal'){
     var marcasC = cfg.marcas && cfg.marcas.length ? cfg.marcas : BRANDS.map(function(b){return b.id;});
     var baseC = repFiltrar(repVentasCrudas(marcasC), per.desde, per.hasta, {});
@@ -7075,7 +7075,7 @@ function repDetalleFilas(ventas, multiMarca){
   return ventas.map(function(v){
     return {
       fecha: v.fecha||'', marca: multiMarca ? (v._marcaNombre||'') : (v._marcaNombre||''),
-      sucursal: v.sucursal||'Sin sucursal', asesor: v.asesor||'Sin asesor', producto: v.producto||'Sin producto',
+      sucursal: v.sucursal||'Sin sucursal', asesor: v.asesor||'Sin asesor', producto: canonProducto(v.producto)||'Sin producto',
       categoria: 'N/D', cantidad: v.cantidad||0, precio: v.precio||0, descuento: 'N/D', total: v.total||0,
       canalLabel: repCanalLabel(v.canal), desdeLead: repDesdeLead(v.canal), notas: v.observaciones||'—'
     };
@@ -7414,7 +7414,7 @@ function construirReporteComparativoHTML(cmp, cfg, theme){
   var detalleFilas = todasVentas.map(function(v){
     return {
       fecha: v.fecha||'', marca: v._grupo, sucursal: v.sucursal||'Sin sucursal', asesor: v.asesor||'Sin asesor',
-      producto: v.producto||'Sin producto', categoria:'N/D', cantidad: v.cantidad||0, precio: v.precio||0, descuento:'N/D',
+      producto: canonProducto(v.producto)||'Sin producto', categoria:'N/D', cantidad: v.cantidad||0, precio: v.precio||0, descuento:'N/D',
       total: v.total||0, canalLabel: repCanalLabel(v.canal), desdeLead: repDesdeLead(v.canal), notas: v.observaciones||'—'
     };
   });
@@ -7502,7 +7502,7 @@ function repCanalesDisponibles(marcaIds){
 }
 function repProductosDisponibles(marcaIds){
   var crudas = repVentasCrudas(marcaIds);
-  return Array.from(new Set(crudas.map(function(v){return v.producto;}).filter(Boolean))).sort();
+  return Array.from(new Set(crudas.map(function(v){return canonProducto(v.producto);}).filter(Boolean))).sort();
 }
 function repSelectHTML(id, opciones, valorActual, placeholder){
   return '<select id="'+id+'"><option value="">'+placeholder+'</option>'+opciones.map(function(o){
@@ -9147,7 +9147,7 @@ function repV2ConstruirDocumento(rd, cfg, theme){
   if(rd.mejorPeorDia.peor){ for(var wi=0;wi<evo.length;wi++){ if(evo[wi].fecha===rd.mejorPeorDia.peor.fecha){ worstIdx=wi; break; } } }
 
   function mapRow(v){
-    return {Fecha: fechaCorta(v.fecha), Producto: v.producto||'Sin producto', Sucursal: v.sucursal||'Sin sucursal',
+    return {Fecha: fechaCorta(v.fecha), Producto: canonProducto(v.producto)||'Sin producto', Sucursal: v.sucursal||'Sin sucursal',
       Asesor: v.asesor||'Sin asesor', Canal: repCanalLabel(v.canal), Monto: v.total||0};
   }
   var rowsAll = rd.ventasDetalle.map(mapRow);
