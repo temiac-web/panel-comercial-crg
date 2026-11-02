@@ -231,6 +231,9 @@ tbody tr:hover{background:var(--surface-hover);}
 .inline-add{display:flex;gap:8px;flex-wrap:wrap;}
 .inline-add input,.inline-add select{flex:1;min-width:110px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12.5px;font-family:inherit;outline:none;}
 .inline-add input:focus,.inline-add select:focus{border-color:var(--accent);}
+.prod-sug{position:absolute;left:0;right:0;top:100%;z-index:80;background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-top:4px;max-height:260px;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,.35);}
+.prod-sug-item{padding:8px 10px;font-size:12.5px;cursor:pointer;color:var(--text);}
+.prod-sug-item:hover,.prod-sug-item.act{background:rgba(120,160,255,.16);}
 
 /* Importación de historial */
 .import-row{display:flex;align-items:center;gap:14px;padding:12px 14px;background:var(--surface-raised);border:1px solid var(--border);border-radius:11px;flex-wrap:wrap;}
@@ -320,8 +323,6 @@ body.solo-lectura #cfgCanalAdd{display:none!important;}
 .gal-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;}
 .gal-pill{font-size:11px;font-weight:800;padding:2px 9px;border-radius:999px;background:rgba(224,163,58,.2);color:#F0C06A;white-space:nowrap;}
 .gal-pill.critico{background:rgba(229,72,77,.22);color:#FF8B8F;}
-.gal-row.cliente{border-left-color:#3987E5;}
-.gal-pill.cliente{background:rgba(57,135,229,.2);color:#7AB0EF;}
 .gal-mot{font-size:12.5px;color:var(--text-soft);line-height:1.6;}
 .gal-act{margin-top:8px;text-align:right;}
 .gal-warn{font-size:13px;color:#F0C06A;padding:8px 0;}
@@ -896,6 +897,13 @@ body.solo-lectura #cfgCanalAdd{display:none!important;}
             <p style="font-size:11.5px;color:var(--text-mute);margin-bottom:10px;">Si una misma persona quedó escrita de varias formas (con abreviaciones, con la marca al final, sin tilde…), únela aquí. Sus ventas, garantías y registros pasan a un solo nombre en las 3 marcas, y desde entonces cualquier venta nueva con esa escritura se guarda sola con el nombre oficial.</p>
             <button class="btn btn-ghost" id="cfgUnifAbrir">Revisar nombres repetidos</button>
             <div id="cfgUnifPanel" style="margin-top:12px;"></div>
+          </div>
+
+          <div id="cfgProdBox" style="margin-top:18px;">
+            <div class="card-head" style="margin-bottom:8px;"><h3 style="font-size:13px;">Unificar nombres de productos</h3></div>
+            <p style="font-size:11.5px;color:var(--text-mute);margin-bottom:10px;">Si un mismo equipo quedó escrito de varias formas (ej. "DELL 5300 I5 8TH 8/256" y "DELL LATITUDE 5300 i5 8th 8gb ram 256gb ssd"), únelo aquí. Se reconoce por su modelo: cuenta como el mismo producto aunque cambie la RAM o el disco. Las ventas anteriores y las nuevas pasan al nombre oficial, y el ranking "Top productos" los cuenta como uno solo.</p>
+            <button class="btn btn-ghost" id="cfgProdAbrir">Revisar productos repetidos</button>
+            <div id="cfgProdPanel" style="margin-top:12px;"></div>
           </div>
 
           <div style="margin-top:18px;">
@@ -1534,6 +1542,7 @@ Store.ventaPorNotaFina = function(b, nota){
 Store.addVenta = function(b, venta){
   var list = Store.ventas(b);
   if(venta.asesor) venta.asesor = canonAsesor(venta.asesor);
+  if(venta.producto){ var pc = canonProducto(venta.producto); if(pc !== venta.producto){ venta.productoOriginal = venta.producto; venta.producto = pc; } }
   venta.id = uid('v');
   venta.creadoEn = new Date().toISOString();
   list.push(venta);
@@ -1545,6 +1554,7 @@ Store.updateVenta = function(b, id, data){
   var i = list.findIndex(function(x){return x.id===id;});
   if(i===-1) return false;
   if(data && data.asesor) data = Object.assign({}, data, {asesor: canonAsesor(data.asesor)});
+  if(data && data.producto){ var pc = canonProducto(data.producto); if(pc !== data.producto) data = Object.assign({}, data, {producto: pc, productoOriginal: data.producto}); }
   list[i] = Object.assign({}, list[i], data);
   Store.set(Store.k.ventas(b), list);
   return true;
@@ -1609,6 +1619,7 @@ Store.deleteIncidencia = function(b, id){
    ambos opcionales — no siempre se conocen al momento de registrar el caso. */
 Store.addGarantia = function(b, g){
   var list = Store.garantias(b);
+  if(g.producto){ var pc = canonProducto(g.producto); if(pc !== g.producto){ g.productoOriginal = g.producto; g.producto = pc; } }
   g.id = uid('gar');
   g.creadoEn = new Date().toISOString();
   list.push(g);
@@ -1829,7 +1840,18 @@ function normNombre(s){
    crg_alias_asesores; canonAsesor() lo aplica al guardar una venta y mismoAsesor() lo aplica al
    comparar, para que las ventas le lleguen al asesor correcto sin importar cómo se escribió. */
 var ALIAS_KEY = 'crg_alias_asesores';
-var ASESOR_RUIDO = ['tekio','infot','megalaptop','meglaptop','mega','laptop'];
+var ASESOR_RUIDO = ['tekio','tequio','tekyo','infot','info','infotech','megalaptop','meglaptop','megalapto','megalaptops','mega','laptop','laptops','de','del'];
+/* Personas que venden en todas las marcas: cualquier forma de escribir su nombre pasa al nombre oficial.
+   Si cambia la ortografía oficial, se corrige aquí. Las claves van sin tildes y sin la marca. */
+var PERSONAS_FIJAS = [
+  {oficial:'Gabriela Sánchez', claves:['gabriela','gabriela sanchez']},
+  {oficial:'Danielis Jiménez', claves:['danielis','danieli','danielis jimenez','danieli jimenez']},
+  {oficial:'Caira Romero',     claves:['caira','kaira','caira romero','kaira romero']}
+];
+function personaFija(k){
+  for(var i=0;i<PERSONAS_FIJAS.length;i++){ if(PERSONAS_FIJAS[i].claves.indexOf(k)>=0) return PERSONAS_FIJAS[i].oficial; }
+  return '';
+}
 function claveAsesor(s){
   return normNombre(s).replace(/[^a-z0-9 ]/g,' ').split(' ').filter(function(t){ return t && ASESOR_RUIDO.indexOf(t)===-1; }).join(' ');
 }
@@ -1837,7 +1859,7 @@ function aliasAsesores(){ var a = Store.get(ALIAS_KEY, {}); return (a && typeof 
 function canonAsesor(nombre){
   var n = String(nombre==null ? '' : nombre).trim(); if(!n) return n;
   var k = claveAsesor(n); if(!k) return n;
-  return aliasAsesores()[k] || n;
+  return aliasAsesores()[k] || personaFija(k) || n;
 }
 function mismoAsesor(a, b){
   var x = claveAsesor(canonAsesor(a)), y = claveAsesor(canonAsesor(b));
@@ -1958,10 +1980,39 @@ function unifSugerir(lista){
   Object.keys(res).forEach(function(n){ var g = 0; while(res[res[n]] && g++ < 6) res[n] = res[res[n]]; });
   return res;
 }
+function unifFijasPend(){
+  var out = [];
+  unifDatos().forEach(function(x){ var c = canonAsesor(x.nombre); if(c !== x.nombre) out.push({de:x.nombre, a:c, ventas:x.ventas}); });
+  return out;
+}
+function unifFijasHTML(){
+  var pend = unifFijasPend();
+  var resumen = pend.length
+    ? '<ul style="margin:6px 0 10px 18px;font-size:12.5px;color:var(--text-soft);">'+pend.map(function(p){ return '<li><strong style="color:var(--text);">'+evEsc(p.de)+'</strong> pasa a <strong style="color:var(--text);">'+evEsc(p.a)+'</strong> ('+p.ventas+' venta'+(p.ventas===1?'':'s')+')</li>'; }).join('')+'</ul>'
+    : '<p style="font-size:12.5px;color:var(--positive);margin:6px 0 4px;">Gabriela, Danielis y Caira ya están unificadas en las 3 marcas.</p>';
+  return '<div class="card" style="margin-bottom:14px;"><div class="card-head" style="margin-bottom:4px;"><h3 style="font-size:13px;">Gabriela, Danielis y Caira</h3></div>'+
+    '<p style="font-size:12px;color:var(--text-soft);">Cada una es una sola persona que vende en todas las marcas. Cualquier forma de escribir su nombre (con la marca, sin apellido, con errores) pasa a su nombre oficial.</p>'+
+    resumen+
+    (pend.length ? '<div style="display:flex;gap:10px;align-items:center;"><button class="btn btn-primary" id="cfgUnifFijas">Unificar estas personas</button><span id="cfgUnifMsg2" style="font-size:12px;color:var(--text-soft);"></span></div><p style="font-size:11px;color:var(--text-mute);margin-top:8px;">Antes de cambiar nada se descarga un archivo de respaldo.</p>' : '')+'</div>';
+}
+function unifFijas(){
+  var pend = unifFijasPend(), m = document.getElementById('cfgUnifMsg2');
+  if(!pend.length){ if(m) m.textContent = 'Ya están unificadas.'; return; }
+  if(!confirm('Vas a unificar '+pend.length+' nombre'+(pend.length===1?'':'s')+' en las 3 marcas:\n\n'+pend.map(function(p){ return '• '+p.de+' → '+p.a; }).join('\n')+'\n\nSe descargará un respaldo antes de empezar. ¿Continuar?')) return;
+  unifRespaldo();
+  var alias = aliasAsesores();
+  pend.forEach(function(p){ var k = claveAsesor(p.de); if(k) alias[k] = p.a; });
+  Store.set(ALIAS_KEY, alias);
+  var r = unifMigrar();
+  try{ if(window.cfgDrawAll) window.cfgDrawAll(); }catch(e){}
+  unifRender();
+  var m2 = document.getElementById('cfgUnifMsg2') || document.getElementById('cfgUnifMsg');
+  if(m2) m2.textContent = 'Listo: '+r.ventas+' venta'+(r.ventas===1?'':'s')+' y '+r.otros+' registro'+(r.otros===1?'':'s')+' más pasaron al nombre oficial; '+r.roster+' asesor'+(r.roster===1?'':'es')+' repetido'+(r.roster===1?'':'s')+' se fusionó. Recarga la página para ver todo actualizado.';
+}
 function unifRender(){
   var box = document.getElementById('cfgUnifPanel'); if(!box) return;
   var lista = unifDatos();
-  if(lista.length < 2){ box.innerHTML = '<div class="mini-empty">No hay nombres que unificar.</div>'; return; }
+  if(lista.length < 2){ box.innerHTML = unifFijasHTML()+'<div class="mini-empty">No hay otros nombres que unificar.</div>'; return; }
   var sug = unifSugerir(lista);
   var nSug = Object.keys(sug).length;
   var filas = lista.map(function(x, i){
@@ -1972,14 +2023,14 @@ function unifRender(){
     return '<tr'+(sug[x.nombre]?' style="background:rgba(120,160,255,.08);"':'')+'><td style="font-weight:600;color:var(--text);">'+evEsc(x.nombre)+'</td><td>'+evEsc(marcas)+'</td><td>'+x.ventas+'</td>' +
       '<td><select data-unif="'+i+'" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 8px;font-size:12.5px;max-width:260px;">'+opts+'</select></td></tr>';
   }).join('');
-  box.innerHTML =
+  box.innerHTML = unifFijasHTML() +
     '<p style="font-size:12px;color:var(--text-soft);margin-bottom:8px;">'+(nSug ? 'Detecté <strong>'+nSug+'</strong> nombre'+(nSug===1?'':'s')+' que parecen repetidos (resaltados) y los dejé ya seleccionados. Revísalos: si alguno no es la misma persona, cámbialo a "persona distinta".' : 'No detecté repetidos automáticamente. Si ves a una misma persona escrita de dos formas, elígela en la lista de la derecha.')+'</p>' +
     '<div class="table-wrap"><table style="min-width:620px;"><thead><tr><th>Nombre escrito</th><th>Marcas</th><th>Ventas</th><th>Unificar con</th></tr></thead><tbody>'+filas+'</tbody></table></div>' +
     '<div style="margin-top:10px;display:flex;gap:10px;align-items:center;"><button class="btn btn-primary" id="cfgUnifAplicar">Unificar los seleccionados</button><span id="cfgUnifMsg" style="font-size:12px;color:var(--text-soft);"></span></div>' +
     '<p style="font-size:11px;color:var(--text-mute);margin-top:8px;">Antes de cambiar nada se descarga un archivo de respaldo con tus ventas y asesores actuales.</p>';
   box._lista = lista;
 }
-function unifRespaldo(){
+function unifRespaldo(nombreArchivo){
   var bk = {fecha:new Date().toISOString(), alias:aliasAsesores(), marcas:{}};
   BRANDS.forEach(function(b){
     bk.marcas[b.id] = {ventas:Store.ventas(b.id), asesores:Store.asesores(b.id),
@@ -1989,7 +2040,7 @@ function unifRespaldo(){
   try{
     var blob = new Blob([JSON.stringify(bk)], {type:'application/json'});
     var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = 'respaldo-antes-de-unificar-asesores.json';
+    a.download = (typeof nombreArchivo==='string' && nombreArchivo) ? nombreArchivo : 'respaldo-antes-de-unificar-asesores.json';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   }catch(e){}
 }
@@ -2055,6 +2106,242 @@ document.addEventListener('click', function(e){
   var t = e.target; if(!t || !t.id) return;
   if(t.id==='cfgUnifAbrir') unifRender();
   else if(t.id==='cfgUnifAplicar') unifAplicar();
+  else if(t.id==='cfgUnifFijas') unifFijas();
+});
+
+/* ---- Unificación de nombres de productos ----
+   Un mismo equipo puede quedar escrito de varias formas ("DELL 5300 I5 8TH 8/256", "DELL LATITUDE 5300
+   i5 8th 8gb ram 256gb ssd"). Cada producto se reconoce por su MODELO (marca + número, ej. "dell 5300"):
+   todo lo que tenga ese modelo cuenta como el mismo producto aunque cambie la RAM o el disco.
+   Se guarda un mapa en crg_alias_productos (clave → nombre oficial); canonProducto() lo aplica al guardar
+   una venta o garantía. La escritura original queda en productoOriginal y nada se borra. */
+var ALIAS_PROD_KEY = 'crg_alias_productos';
+var PRODUCTOS_FIJOS = [
+  {modelo:'dell 5300', oficial:'DELL LATITUDE 5300 I5 8TH 8/256'}
+];
+var PROD_MARCAS = ['dell','hp','lenovo','asus','acer','apple','msi','samsung','toshiba','huawei','gigabyte','razer','microsoft','xiaomi'];
+var PROD_LINEAS = {latitude:'dell',inspiron:'dell',precision:'dell',presicion:'dell',vostro:'dell',xps:'dell',alienware:'dell',
+  thinkpad:'lenovo',ideapad:'lenovo',legion:'lenovo',yoga:'lenovo',thinkbook:'lenovo',loq:'lenovo',
+  macbook:'apple',imac:'apple',
+  elitebook:'hp',probook:'hp',pavilion:'hp',omen:'hp',victus:'hp',envy:'hp',spectre:'hp',zbook:'hp',
+  vivobook:'asus',zenbook:'asus',tuf:'asus',rog:'asus',
+  aspire:'acer',nitro:'acer',predator:'acer',swift:'acer',surface:'microsoft'};
+var PROD_NO_CODIGO = {rtx:1,gtx:1,gt:1,mx:1,rx:1,radeon:1,geforce:1,windows:1,win:1,ddr:1,iris:1,ryzen:1};
+function prodTokens(s){ return normNombre(s).replace(/[^a-z0-9]+/g,' ').trim().split(' ').filter(Boolean); }
+function claveProducto(s){ return normNombre(s).replace(/[^a-z0-9\/]+/g,' ').replace(/\s+/g,' ').trim(); }
+/* Modelo = marca + códigos de modelo (4 dígitos como 5300 o letra+números como e15). Vacío si no se reconoce. */
+function prodModelo(s){
+  var t = prodTokens(s), codes = [], marca = '';
+  t.forEach(function(w, i){
+    if(!marca){ if(PROD_MARCAS.indexOf(w)>=0) marca = w; else if(PROD_LINEAS[w]) marca = PROD_LINEAS[w]; }
+    var prev = i>0 ? t[i-1] : '';
+    if(PROD_NO_CODIGO[prev]) return;
+    if(/^\d{4}$/.test(w)){
+      var n = parseInt(w,10);
+      if((n>=1900 && n<=2099) || n===1024 || n===2048 || n===4096) return;
+      codes.push(w);
+    } else if(/^[a-z]\d{2,3}$/.test(w) && w!=='w10' && w!=='w11'){
+      codes.push(w);
+    }
+  });
+  return codes.length ? (marca ? marca+' ' : '')+codes.join(' ') : '';
+}
+function aliasProductos(){ var a = Store.get(ALIAS_PROD_KEY, {}); return (a && typeof a==='object') ? a : {}; }
+function prodFijo(n){
+  var m = prodModelo(n); if(!m) return '';
+  for(var i=0;i<PRODUCTOS_FIJOS.length;i++){ if(PRODUCTOS_FIJOS[i].modelo===m) return PRODUCTOS_FIJOS[i].oficial; }
+  return '';
+}
+function canonProducto(nombre){
+  var n = String(nombre==null ? '' : nombre).trim(); if(!n) return n;
+  var al = aliasProductos(), m = prodModelo(n);
+  return al[claveProducto(n)] || (m && al['#'+m]) || prodFijo(n) || n;
+}
+/* Productos tal como están guardados (canon=false) o ya pasados por el nombre oficial (canon=true). */
+function prodDatos(canon){
+  var mapa = {};
+  BRANDS.forEach(function(b){
+    Store.ventas(b.id).forEach(function(v){
+      var n = String(v.producto||'').trim(); if(!n) return;
+      if(canon) n = canonProducto(n);
+      var o = mapa[n] || (mapa[n] = {nombre:n, ventas:0, unidades:0, marcas:{}});
+      o.ventas++; o.unidades += (parseFloat(v.cantidad)||0); o.marcas[b.id] = true;
+    });
+  });
+  return Object.keys(mapa).map(function(k){ return mapa[k]; }).sort(function(a,b){ return (b.unidades-a.unidades) || a.nombre.localeCompare(b.nombre); });
+}
+/* Grupos de productos con el mismo modelo que todavía no están unificados. */
+function prodGrupos(lista){
+  var por = {}, al = aliasProductos(), out = [];
+  lista.forEach(function(x){ var m = prodModelo(x.nombre); if(!m) return; (por[m] = por[m] || []).push(x); });
+  Object.keys(por).forEach(function(m){
+    var vars = por[m];
+    var fijo = PRODUCTOS_FIJOS.filter(function(f){ return f.modelo===m; })[0];
+    var oficial = al['#'+m] || (fijo ? fijo.oficial : '');
+    if(!oficial){
+      if(vars.length < 2) return;
+      oficial = vars.slice().sort(function(a,b){ return (b.unidades-a.unidades) || (a.nombre.length-b.nombre.length); })[0].nombre;
+    }
+    if(vars.every(function(x){ return x.nombre === oficial; })) return;   // ya está todo unificado
+    out.push({modelo:m, variantes:vars, oficial:oficial, unidades:vars.reduce(function(s,x){ return s+x.unidades; },0)});
+  });
+  return out.sort(function(a,b){ return b.unidades-a.unidades; });
+}
+/* Lista de nombres para sugerir al registrar una venta (los más vendidos primero). */
+function prodSugerencias(){
+  var vistos = {}, out = [];
+  prodDatos(true).forEach(function(x){ if(!vistos[x.nombre]){ vistos[x.nombre] = 1; out.push(x.nombre); } });
+  PRODUCTOS_FIJOS.forEach(function(f){ if(!vistos[f.oficial]){ vistos[f.oficial] = 1; out.push(f.oficial); } });
+  return out;
+}
+/* Caja de sugerencias bajo un campo de texto: filtra por todas las palabras escritas ("5300" → DELL LATITUDE 5300…). */
+function prodAutocompletar(input){
+  if(!input || input._prodAC) return; input._prodAC = true;
+  var wrap = input.parentNode; wrap.style.position = 'relative';
+  var caja = document.createElement('div'); caja.className = 'prod-sug'; caja.style.display = 'none'; wrap.appendChild(caja);
+  var nombres = null, items = [], sel = -1;
+  input.setAttribute('autocomplete','off');
+  function ocultar(){ caja.style.display = 'none'; sel = -1; }
+  function elegir(n){ input.value = n; ocultar(); try{ input.dispatchEvent(new Event('input',{bubbles:true})); }catch(e){} }
+  function marcar(){ Array.prototype.forEach.call(caja.children, function(el, i){ el.classList.toggle('act', i===sel); }); }
+  function mostrar(){
+    if(!nombres) nombres = prodSugerencias();
+    var toks = claveProducto(input.value).split(' ').filter(Boolean);
+    items = nombres.filter(function(n){ var k = claveProducto(n); return toks.every(function(t){ return k.indexOf(t) >= 0; }); }).slice(0, 8);
+    if(!items.length || (items.length===1 && items[0]===input.value.trim())){ ocultar(); return; }
+    caja.innerHTML = '';
+    items.forEach(function(n){
+      var el = document.createElement('div'); el.className = 'prod-sug-item'; el.textContent = n;
+      el.addEventListener('mousedown', function(e){ e.preventDefault(); elegir(n); });
+      caja.appendChild(el);
+    });
+    sel = -1; caja.style.display = 'block';
+  }
+  input.addEventListener('input', mostrar);
+  input.addEventListener('focus', mostrar);
+  input.addEventListener('blur', function(){ setTimeout(ocultar, 120); });
+  input.addEventListener('keydown', function(e){
+    if(caja.style.display==='none') return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); sel = Math.min(items.length-1, sel+1); marcar(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); sel = Math.max(0, sel-1); marcar(); }
+    else if(e.key==='Enter' && sel>=0){ e.preventDefault(); elegir(items[sel]); }
+    else if(e.key==='Escape'){ ocultar(); }
+  });
+}
+function prodGrupoHTML(g, i){
+  var filas = g.variantes.map(function(x, j){
+    return '<tr><td style="width:34px;"><input type="checkbox" data-prodvar="'+j+'" checked></td><td style="font-weight:600;color:var(--text);">'+evEsc(x.nombre)+'</td><td>'+x.ventas+'</td><td>'+x.unidades+'</td></tr>';
+  }).join('');
+  return '<div class="card" style="margin-bottom:12px;padding:14px;" data-prodgrupo="'+i+'">' +
+    '<div style="font-size:12px;color:var(--text-soft);margin-bottom:8px;">Modelo detectado: <strong style="color:var(--text);">'+evEsc(g.modelo.toUpperCase())+'</strong> · '+g.variantes.length+' forma'+(g.variantes.length===1?'':'s')+' de escribirlo · '+g.unidades+' unidad'+(g.unidades===1?'':'es')+'</div>' +
+    '<div class="table-wrap"><table style="min-width:420px;"><thead><tr><th></th><th>Como está escrito hoy</th><th>Ventas</th><th>Unidades</th></tr></thead><tbody>'+filas+'</tbody></table></div>' +
+    '<div class="field" style="margin-top:10px;"><label>Nombre oficial (así se verá en el ranking)</label><input type="text" data-prodoficial="'+i+'" value="'+evEsc(g.oficial)+'"></div></div>';
+}
+function prodRender(){
+  var box = document.getElementById('cfgProdPanel'); if(!box) return;
+  var lista = prodDatos(false), grupos = prodGrupos(lista);
+  var html = '';
+  if(grupos.length){
+    html += '<p style="font-size:12px;color:var(--text-soft);margin-bottom:10px;">Detecté <strong>'+grupos.length+'</strong> producto'+(grupos.length===1?'':'s')+' escrito'+(grupos.length===1?'':'s')+' de varias formas. Revisa el nombre oficial de cada uno y desmarca lo que NO sea el mismo equipo.</p>' +
+      grupos.map(prodGrupoHTML).join('') +
+      '<div style="margin-top:6px;display:flex;gap:10px;align-items:center;"><button class="btn btn-primary" id="cfgProdAplicar">Unificar los marcados</button><span id="cfgProdMsg" style="font-size:12px;color:var(--text-soft);"></span></div>' +
+      '<p style="font-size:11px;color:var(--text-mute);margin-top:8px;">Antes de cambiar nada se descarga un archivo de respaldo. La forma original en que se escribió cada venta se conserva aparte.</p>';
+  } else {
+    html += '<div class="mini-empty">No detecté productos repetidos: todos los modelos ya están unificados.</div><span id="cfgProdMsg" style="font-size:12px;color:var(--positive);"></span>';
+  }
+  var filasMan = lista.map(function(x, i){
+    return '<tr data-prodfila="'+evEsc(claveProducto(x.nombre))+'"><td style="width:34px;"><input type="checkbox" data-prodman="'+i+'"></td><td style="font-weight:600;color:var(--text);">'+evEsc(x.nombre)+'</td><td>'+x.ventas+'</td><td>'+x.unidades+'</td></tr>';
+  }).join('');
+  html += '<details style="margin-top:14px;"><summary style="cursor:pointer;font-size:12.5px;color:var(--text-soft);">Unir otros productos a mano</summary>' +
+    '<p style="font-size:11.5px;color:var(--text-mute);margin:8px 0;">Para equipos que el sistema no reconoce solo (por ejemplo sin número de modelo). Marca los que son el mismo producto y escribe el nombre oficial.</p>' +
+    '<div class="inline-add" style="margin-bottom:8px;"><input type="text" id="cfgProdFiltro" placeholder="Buscar producto…"></div>' +
+    '<div class="table-wrap" style="max-height:280px;overflow:auto;"><table style="min-width:420px;"><thead><tr><th></th><th>Producto</th><th>Ventas</th><th>Unidades</th></tr></thead><tbody>'+filasMan+'</tbody></table></div>' +
+    '<div class="inline-add" style="margin-top:10px;"><input type="text" id="cfgProdManualNombre" placeholder="Nombre oficial"><button class="btn btn-primary" id="cfgProdManualAplicar">Unir los marcados</button></div>' +
+    '<span id="cfgProdMsg2" style="font-size:12px;color:var(--text-soft);display:block;margin-top:6px;"></span></details>';
+  box.innerHTML = html;
+  box._lista = lista; box._grupos = grupos;
+}
+function prodMigrar(){
+  var r = {ventas:0, otros:0};
+  BRANDS.forEach(function(b){
+    var vs = Store.ventas(b.id), ch = false;
+    vs.forEach(function(x){
+      if(!x.producto) return;
+      var c = canonProducto(x.producto);
+      if(c !== x.producto){ if(!x.productoOriginal) x.productoOriginal = x.producto; x.producto = c; ch = true; r.ventas++; }
+    });
+    if(ch) Store.set(Store.k.ventas(b.id), vs);
+    var gs = Store.get(Store.k.garantias(b.id), []);
+    if(Array.isArray(gs)){
+      var c2 = false;
+      gs.forEach(function(x){
+        if(!x || !x.producto) return;
+        var c = canonProducto(x.producto);
+        if(c !== x.producto){ if(!x.productoOriginal) x.productoOriginal = x.producto; x.producto = c; c2 = true; r.otros++; }
+      });
+      if(c2) Store.set(Store.k.garantias(b.id), gs);
+    }
+  });
+  return r;
+}
+function prodTerminar(r, msgId, ant){
+  try{ if(window.cfgDrawAll) window.cfgDrawAll(); }catch(e){}
+  prodRender();
+  var m = document.getElementById('cfgProdMsg') || document.getElementById(msgId);
+  if(m) m.textContent = 'Listo: '+r.ventas+' venta'+(r.ventas===1?'':'s')+' y '+r.otros+' garantía'+(r.otros===1?'':'s')+' pasaron al nombre oficial. Recarga la página para ver los gráficos actualizados.';
+}
+function prodAplicar(){
+  var box = document.getElementById('cfgProdPanel'); if(!box || !box._grupos) return;
+  var cambios = [], resumen = [];
+  box.querySelectorAll('[data-prodgrupo]').forEach(function(card){
+    var g = box._grupos[parseInt(card.getAttribute('data-prodgrupo'),10)]; if(!g) return;
+    var oficial = (card.querySelector('input[data-prodoficial]').value || '').trim();
+    var marcadas = [];
+    card.querySelectorAll('input[data-prodvar]').forEach(function(cb){ if(cb.checked) marcadas.push(g.variantes[parseInt(cb.getAttribute('data-prodvar'),10)].nombre); });
+    if(!oficial || !marcadas.length) return;
+    cambios.push({modelo:g.modelo, oficial:oficial, marcadas:marcadas, todas:marcadas.length===g.variantes.length});
+    resumen.push('• '+marcadas.length+' forma'+(marcadas.length===1?'':'s')+' → '+oficial);
+  });
+  var m = document.getElementById('cfgProdMsg');
+  if(!cambios.length){ if(m) m.textContent = 'No hay nada marcado para unificar.'; return; }
+  if(!confirm('Vas a unificar productos en las 3 marcas:\n\n'+resumen.join('\n')+'\n\nSe descargará un respaldo antes de empezar. ¿Continuar?')) return;
+  unifRespaldo('respaldo-antes-de-unificar-productos.json');
+  var alias = aliasProductos();
+  cambios.forEach(function(c){
+    if(c.todas) alias['#'+c.modelo] = c.oficial;           // todo lo de ese modelo, aunque cambie la RAM
+    else c.marcadas.forEach(function(n){ alias[claveProducto(n)] = c.oficial; });
+  });
+  Store.set(ALIAS_PROD_KEY, alias);
+  prodTerminar(prodMigrar(), 'cfgProdMsg');
+}
+function prodAplicarManual(){
+  var box = document.getElementById('cfgProdPanel'); if(!box || !box._lista) return;
+  var nombre = (document.getElementById('cfgProdManualNombre').value || '').trim();
+  var m2 = document.getElementById('cfgProdMsg2');
+  var marcados = [];
+  box.querySelectorAll('input[data-prodman]').forEach(function(cb){ if(cb.checked) marcados.push(box._lista[parseInt(cb.getAttribute('data-prodman'),10)].nombre); });
+  if(marcados.length < 1 || !nombre){ if(m2) m2.textContent = 'Marca al menos un producto y escribe el nombre oficial.'; return; }
+  if(!confirm('Vas a unir '+marcados.length+' producto'+(marcados.length===1?'':'s')+' bajo el nombre:\n\n'+nombre+'\n\nSe descargará un respaldo antes de empezar. ¿Continuar?')) return;
+  unifRespaldo('respaldo-antes-de-unificar-productos.json');
+  var alias = aliasProductos();
+  marcados.forEach(function(n){ alias[claveProducto(n)] = nombre; });
+  alias[claveProducto(nombre)] = nombre;
+  Store.set(ALIAS_PROD_KEY, alias);
+  prodTerminar(prodMigrar(), 'cfgProdMsg2');
+}
+document.addEventListener('click', function(e){
+  var t = e.target; if(!t || !t.id) return;
+  if(t.id==='cfgProdAbrir') prodRender();
+  else if(t.id==='cfgProdAplicar') prodAplicar();
+  else if(t.id==='cfgProdManualAplicar') prodAplicarManual();
+});
+document.addEventListener('input', function(e){
+  var t = e.target; if(!t || t.id!=='cfgProdFiltro') return;
+  var q = claveProducto(t.value).split(' ').filter(Boolean);
+  document.querySelectorAll('#cfgProdPanel tr[data-prodfila]').forEach(function(tr){
+    var k = tr.getAttribute('data-prodfila');
+    tr.style.display = q.every(function(w){ return k.indexOf(w)>=0; }) ? '' : 'none';
+  });
 });
 
 
@@ -3266,7 +3553,7 @@ function renderVentasTab(brand, panel){
           '<div class="field"><label>N° Nota Fina</label><input type="text" id="vf-nota" value="'+(v?v.notaFina:'')+'" placeholder="Ej. 1555"></div>' +
           '<div class="field"><label>Sucursal</label><select id="vf-form-suc"><option value="">Selecciona…</option>'+sucursales.map(function(s){return '<option'+(v&&v.sucursal===s.nombre?' selected':'')+'>'+s.nombre+'</option>';}).join('')+'</select></div>' +
           '<div class="field"><label>Asesor</label><select id="vf-form-ase"><option value="">Selecciona…</option>'+asesores.map(function(a){return asesorOpcion(a, v&&mismoAsesor(v.asesor, a.nombre));}).join('')+'</select></div>' +
-          '<div class="field grow"><label>Producto</label><input type="text" id="vf-producto" value="'+(v?v.producto:'')+'" placeholder="Ej. Laptop 15\\" 8GB/256GB"></div>' +
+          '<div class="field grow"><label>Producto</label><input type="text" id="vf-producto" value="'+(v?v.producto:'')+'" placeholder="Escribe y elige de la lista (ej. 5300)"></div>' +
           '<div class="field"><label>Cantidad</label><input type="number" min="1" step="1" id="vf-cant" value="'+(v?v.cantidad:1)+'"></div>' +
           '<div class="field"><label>Precio</label><input type="number" min="0" step="0.01" id="vf-precio" value="'+(v?v.precio:'')+'"></div>' +
           '<div class="field"><label>Total</label><div class="readonly-total tabular" id="vf-total">$'+(v?money(v.total):'0.00')+'</div></div>' +
@@ -3286,6 +3573,7 @@ function renderVentasTab(brand, panel){
     }
     byId('vf-cant').addEventListener('input', recalcTotal);
     byId('vf-precio').addEventListener('input', recalcTotal);
+    prodAutocompletar(byId('vf-producto'));
     byId('vform-close').addEventListener('click', closeForm);
     byId('vform-cancel').addEventListener('click', closeForm);
     byId('vform-save').addEventListener('click', function(){ trySave(v); });
@@ -4318,6 +4606,7 @@ function renderGarantiasTab(brand, panel){
       notaInput.addEventListener('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); buscarPorNota(); } });
       if(notaInput.value.trim()) buscarPorNota();
     }
+    prodAutocompletar(byId('gf-form-producto'));
     byId('gform-close').addEventListener('click', closeForm);
     byId('gform-cancel').addEventListener('click', closeForm);
     byId('gform-save').addEventListener('click', function(){ trySave(g); });
@@ -9434,6 +9723,9 @@ function eqCrear(){
   var nom = document.getElementById('eq-nom').value.trim(), mail = document.getElementById('eq-mail').value.trim(), pass = document.getElementById('eq-pass').value, rol = document.getElementById('eq-rol').value;
   var marcas = BRANDS.filter(function(b){ return document.getElementById('eq-m-'+b.id).checked; }).map(function(b){ return b.id; });
   if(!nom || !mail || pass.length < 6){ eqMsg('e','Escribe nombre, correo y una clave de al menos 6 caracteres.'); return; }
+  var kNom = claveAsesor(canonAsesor(nom));
+  var ya = (EV.data.usuarios||[]).filter(function(u){ return u.activo!==false && kNom && claveAsesor(canonAsesor(u.nombre||''))===kNom; })[0];
+  if(ya){ eqMsg('e','Ya existe un acceso para «'+(ya.nombre||ya.email)+'» ('+(ya.email||'')+'). Una persona, un solo acceso: actívale las marcas que falten en su tarjeta.'); return; }
   var sec; try{ sec = firebase.app('sec'); }catch(e){ sec = firebase.initializeApp(FIREBASE_CONFIG, 'sec'); }
   sec.auth().createUserWithEmailAndPassword(mail, pass).then(function(cred){
     var uidNuevo = cred.user.uid;
@@ -9491,7 +9783,7 @@ function renderEquipo(){
       '<div id="eqMsg"></div>'+
       '<div class="card"><div class="card-head"><h3>Agregar persona</h3><span class="tag">ACCESO AL PANEL DE ASESORES</span></div>'+
         '<div class="filterbar">'+
-          '<div class="field grow"><label>Nombre (igual que en el CRG)</label><input type="text" id="eq-nom" placeholder="Ej. Gabriela sanchez infot"></div>'+
+          '<div class="field grow"><label>Nombre (igual que en el CRG)</label><input type="text" id="eq-nom" placeholder="Ej. Gabriela Sánchez (sin la marca)"></div>'+
           '<div class="field grow"><label>Correo</label><input type="email" id="eq-mail" placeholder="correo@ejemplo.com"></div>'+
           '<div class="field grow"><label>Clave temporal (mín. 6)</label><input type="text" id="eq-pass" placeholder="Ej. Cambiar123"></div>'+
           '<div class="field"><label>Rol</label><select id="eq-rol">'+Object.keys(EQ_ROLES).map(function(r){ return '<option value="'+r+'">'+EQ_ROLES[r]+'</option>'; }).join('')+'</select></div>'+
@@ -9932,13 +10224,12 @@ document.getElementById('todayLabel').textContent = hoy.toLocaleDateString('es-V
    entrega. Los días se configuran desde la misma campana y se guardan en la nube
    (store/crg_alertas_garantias) para que el Panel de Asesores muestre las mismas etiquetas. */
 var GAL_KEY = 'crg_alertas_garantias';
-var GAL = {lista:[], cfg:{activo:true,aviso:2,critico:3,cliente:3}, oculto:false};
+var GAL = {lista:[], cfg:{activo:true,aviso:2,critico:3}, oculto:false};
 function galCfg(){
   var c = Store.get(GAL_KEY, null) || {};
   var a = Number(c.aviso)>0 ? Number(c.aviso) : 2, k = Number(c.critico)>0 ? Number(c.critico) : 3;
   if(k<a) k=a;
-  var cl = Number(c.cliente)>0 ? Number(c.cliente) : 3;
-  return {activo:c.activo!==false, aviso:a, critico:k, cliente:cl};
+  return {activo:c.activo!==false, aviso:a, critico:k};
 }
 function galDia(s){ var t = s ? Date.parse(String(s).slice(0,10)+'T00:00:00') : NaN; return isNaN(t)?0:t; }
 function galAlertas(casos, cfg){
@@ -9952,12 +10243,6 @@ function galAlertas(casos, cfg){
     var last=Math.max(creado, asig, c.tomadoMs||0, c.contactoMs||0, c.listoMs||0, tm), m=[];
     function add(k,t,ref){ if(!ref) return; var d=Math.floor((now-ref)/D); if(d>=cfg.aviso) m.push({k:k,t:t,d:d}); }
     if(c.estado!=='Resuelto'){
-      if(c.esperaClienteMs>0){
-        /* El técnico ya escribió y el cliente quedó en responder: se pausa el reloj del técnico y solo se avisa la demora del cliente. */
-        var dc=Math.floor((now-c.esperaClienteMs)/D);
-        if(dc>=cfg.cliente) out.push({c:c,m:[{k:'cliente',t:'El cliente no ha respondido'+(c.esperaClienteNota?' ('+c.esperaClienteNota+')':''),d:dc}],d:dc,nivel:'cliente',tipo:'cliente'});
-        return;
-      }
       if(!c.tecnicoUid) add('sin_tecnico','Nadie ha tomado el caso',creado);
       else if(!c.contactoCaptura) add('sin_contacto','Pasó el plazo de '+cfg.aviso+' días y el técnico no le ha escrito al cliente (sin comprobante)',c.tomadoMs||asig||creado);
       add('sin_mov','Pasó el plazo de '+cfg.aviso+' días y el técnico no ha actualizado el caso',last);
@@ -9968,8 +10253,7 @@ function galAlertas(casos, cfg){
     }
     if(m.length){ var mx=Math.max.apply(null,m.map(function(x){return x.d;})); out.push({c:c,m:m,d:mx,nivel:mx>=cfg.critico?'critico':'aviso'}); }
   });
-  var rk={critico:0,aviso:1,cliente:2};
-  out.sort(function(a,b){ return (rk[a.nivel]-rk[b.nivel]) || b.d-a.d; });
+  out.sort(function(a,b){ return (a.nivel===b.nivel?0:(a.nivel==='critico'?-1:1)) || b.d-a.d; });
   return out;
 }
 function galActualizar(){
@@ -10003,14 +10287,14 @@ function galAbrir(){
   var cfg=GAL.cfg, L=GAL.lista;
   var rows=L.map(function(x){
     var c=x.c;
-    return '<div class="gal-row '+x.nivel+'"><div class="gal-top"><span class="gal-pill '+x.nivel+'">'+(x.nivel==='critico'?'Crítico':x.nivel==='cliente'?'Cliente sin responder':'Aviso')+' · '+x.d+' d</span><b>'+evEsc(c.cliente||'—')+'</b><span class="gal-mut">'+evEsc(evMarcaNombre(c.marca))+' · '+evEsc(c.folio||'')+' · '+evEsc(c.tecnico||'Sin técnico')+'</span></div>'+
+    return '<div class="gal-row '+x.nivel+'"><div class="gal-top"><span class="gal-pill '+x.nivel+'">'+(x.nivel==='critico'?'Crítico':'Aviso')+' · '+x.d+' d</span><b>'+evEsc(c.cliente||'—')+'</b><span class="gal-mut">'+evEsc(evMarcaNombre(c.marca))+' · '+evEsc(c.folio||'')+' · '+evEsc(c.tecnico||'Sin técnico')+'</span></div>'+
       '<div class="gal-mot">'+x.m.map(function(y){ return '• '+evEsc(y.t)+' ('+y.d+' d)'; }).join('<br>')+'</div>'+
       '<div class="gal-act"><button class="btn btn-ghost" data-gal="comp" data-id="'+evEsc(c.id)+'">Ver comprobantes</button></div></div>';
   }).join('') || '<div class="gal-mut" style="padding:14px 0;">'+(cfg.activo?'Todo al día: ninguna garantía supera '+cfg.aviso+' días sin atención.':'Las alertas están apagadas.')+'</div>';
   var crit=L.filter(function(x){return x.nivel==='critico';}).length;
   galModal('<div class="gal-h"><h3>🔔 Alertas de garantías</h3><button class="btn btn-ghost" data-gal="cerrar">Cerrar</button></div>'+
     '<div class="gal-mut">'+L.length+' caso'+(L.length===1?'':'s')+' con alerta'+(crit?' · '+crit+' crítico'+(crit===1?'':'s'):'')+'. Se revisan casos abiertos y equipos listos sin entregar.</div>'+rows+
-    '<div class="gal-cfg"><label>Plazo del técnico (días)<input type="number" min="1" id="galAviso" value="'+cfg.aviso+'"></label><label>Crítico desde (días)<input type="number" min="1" id="galCritico" value="'+cfg.critico+'"></label><label>Cliente sin responder (días)<input type="number" min="1" id="galCliente" value="'+cfg.cliente+'"></label>'+
+    '<div class="gal-cfg"><label>Plazo del técnico (días)<input type="number" min="1" id="galAviso" value="'+cfg.aviso+'"></label><label>Crítico desde (días)<input type="number" min="1" id="galCritico" value="'+cfg.critico+'"></label>'+
     '<label style="flex-direction:row;align-items:center;gap:6px;"><input type="checkbox" id="galActivo"'+(cfg.activo?' checked':'')+'> Alertas activas</label>'+
     '<button class="btn btn-primary" data-gal="guardar">Guardar</button></div>');
 }
@@ -10038,8 +10322,7 @@ document.addEventListener('click', function(e){
     if(!Store._soyEditor) return;
     var av=Math.max(1, parseInt(document.getElementById('galAviso').value,10)||2), cr=Math.max(1, parseInt(document.getElementById('galCritico').value,10)||3);
     if(cr<av) cr=av;
-    var cli=Math.max(1, parseInt(document.getElementById('galCliente').value,10)||3);
-    Store.set(GAL_KEY, {activo:document.getElementById('galActivo').checked, aviso:av, critico:cr, cliente:cli});
+    Store.set(GAL_KEY, {activo:document.getElementById('galActivo').checked, aviso:av, critico:cr});
     GAL.oculto=false; galActualizar(); galAbrir();
   }
 });
@@ -10388,7 +10671,7 @@ function panToMesa(c, us){
     observacion:c.observaciones||'', incidencias:Array.isArray(c.incidencias)?c.incidencias:[],
     responsableIncidencia:c.responsableIncidencia||'', evidencia:c.evidencia||'',
     entregado, fechaEntrega: entregado ? pIso(c.fechaEntregado) : null,
-    reincidenciaDe:c.reincidenciaDe||'', esperaClienteMs:c.esperaClienteMs||0, esperaClienteNota:c.esperaClienteNota||'', creadoPor:c.creadoPor||c.asesor||'', historial, creadoEn
+    reincidenciaDe:c.reincidenciaDe||'', creadoPor:c.creadoPor||c.asesor||'', historial, creadoEn
   };
 }
 /* Caso completo de la Mesa -> documento del panel (crear / importar respaldo). */
@@ -10432,8 +10715,6 @@ function panToPatch(p, base, us){
     const ent = has('entregado') ? !!p.entregado : !!(base && base.fechaEntregado);
     o.fechaEntregado = ent ? (iso2d(p.fechaEntrega) || (base && base.fechaEntregado) || iso2d(nowIso())) : '';
   }
-  if(has('esperaClienteMs')) o.esperaClienteMs = p.esperaClienteMs || 0;
-  if(has('esperaClienteNota')) o.esperaClienteNota = p.esperaClienteNota || '';
   if(has('tipo')) o.tipo = /serv/i.test(p.tipo||'') ? 'Servicio técnico' : 'Garantía';
   if(has('tecnicoId') || has('tecnicoNombre')){
     const nom = p.tecnicoNombre || '';
@@ -11408,7 +11689,7 @@ function renderConfigView(cfg){
   <div class="block">
     <div class="panel">
       <div class="panel-title">📄 Reporte ejecutivo (HTML con gráficas)</div>
-      <div class="panel-sub">Genera un reporte descargable, autocontenido (funciona sin conexión y se ve bien en el teléfono): resumen, pocas gráficas clave, todos los casos separados por estado (pendientes, en proceso, resueltas) con la observación del técnico, tarjetas por técnico y casos con plazo vencido. Solo administración tiene acceso a esta opción.</div>
+      <div class="panel-sub">Genera un reporte descargable, autocontenido (funciona sin conexión), con KPIs, gráficas, desempeño por técnico, casos con plazo de seguimiento vencido y el detalle completo del período que elijas. Solo administración tiene acceso a esta opción.</div>
       <div class="formgrid" style="margin-top:6px;">
         <label class="field">Período<select id="rep-per"><option value="todo">Todo el historial</option><option value="mes">Este mes</option><option value="mesant">Mes anterior</option><option value="30d">Últimos 30 días</option><option value="rango">Rango personalizado</option></select></label>
         <label class="field">Desde<input type="date" id="rep-from"></label>
@@ -11418,7 +11699,7 @@ function renderConfigView(cfg){
         <label class="field">Técnico<select id="rep-tec"><option value="">Todos los técnicos</option>${cfg.technicians.filter(t=>t.active).map(t=>'<option value="'+esc(t.id)+'">'+esc(t.name)+'</option>').join('')}</select></label>
       </div>
       <button class="btn primary sm" id="btn-generate-report" style="margin-top:12px;">📄 Generar y descargar reporte</button>
-      <div class="hint">Si dejas "Desde" vacío, se incluyen todos los casos desde el primero registrado. En el teléfono se abre el menú Compartir para guardarlo en Archivos o enviarlo por WhatsApp.</div>
+      <div class="hint">Si dejas "Desde" vacío, se incluyen todos los casos desde el primero registrado.</div>
     </div>
   </div>
   <div class="block">
@@ -11505,16 +11786,7 @@ function wireCurrentView(cases, cfg){
       genRep.disabled = true; genRep.textContent = 'Generando…';
       try{
         const html = buildReportHtml(from, to, marca, cfg, Store.getCases(), tipo, tec);
-        const nombreRep = 'reporte_garantias_'+(from||'inicio')+'_a_'+(to||todayISO())+'.html';
-        let compartido = false;
-        try{
-          /* En el teléfono se abre el menú Compartir (guardar en Archivos, enviar por WhatsApp, etc.). */
-          if(/iPhone|iPad|Android/i.test(navigator.userAgent) && navigator.share && window.File){
-            const fRep = new File([html], nombreRep, {type:'text/html'});
-            if(!navigator.canShare || navigator.canShare({files:[fRep]})){ await navigator.share({files:[fRep], title:'Reporte de garantías'}); compartido = true; }
-          }
-        }catch(e){ if(e && e.name==='AbortError') compartido = true; }
-        if(!compartido) await saveFile(nombreRep, html);
+        await saveFile('reporte_garantias_'+(from||'inicio')+'_a_'+(to||todayISO())+'.html', html);
       } catch(e){
         toast('No se pudo generar el reporte: '+e.message, '⚠️');
       } finally {
@@ -11797,12 +12069,11 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
 
   /* Plazo de seguimiento: casos de este reporte que hoy superan el plazo del técnico sin escribirle
      al cliente o sin actualizar el caso (misma regla que la campana de alertas). */
-  let plazoRows = [], plazoDias = 2, clienteDias = 3;
+  let plazoRows = [], plazoDias = 2;
   try{
-    plazoDias = galCfg().aviso; clienteDias = galCfg().cliente;
+    plazoDias = galCfg().aviso;
     const idsF = new Set(filtered.map(c=>c.id));
-    const todasAl = galAlertas(panCasos(), galCfg()).filter(x=>idsF.has(x.c.id));
-    plazoRows = todasAl.filter(x=>x.tipo!=='cliente');   // solo lo que es del técnico
+    plazoRows = galAlertas(panCasos(), galCfg()).filter(x=>idsF.has(x.c.id));
   }catch(e){ plazoRows = []; }
   const tecFiltObj = tecnicoFilter ? (cfg.technicians||[]).find(t=>t.id===tecnicoFilter) : null;
 
@@ -11946,241 +12217,52 @@ function buildReportHtml(fromDate, toDate, marcaFilter, cfg, allCases, tipoFilte
     'if(D.techCompare.labels.length){ stackedBarChart("ch-techcompare", D.techCompare.labels, [{label:"Resueltos", data:D.techCompare.resueltos, color:"#0ca30c"},{label:"Pendientes", data:D.techCompare.pendientes, color:"#fab219"},{label:"No procede", data:D.techCompare.noProcede, color:"#8b86a3"}]); }',
   ].join('\n');
 
-  /* ---------- Reporte rediseñado: pocas gráficas, más información, casos por estado ---------- */
-  const hoyMs = Date.now();
-  const plazoPorId = {}; plazoRows.forEach(x=>{ plazoPorId[x.c.id] = x; });
-  const casoPorId = {}; filtered.forEach(c=>{ casoPorId[c.id] = c; });
-  const nEst = e=> filtered.filter(c=>c.estado===e).length;
-  const nPend = nEst('Pendiente'), nProc = nEst('En revisión')+nEst('En proceso'), nRes = nEst('Resuelto'), nNoProc = nEst('No procede');
-  const nPorEntregar = filtered.filter(isPorEntregar).length;
-  const esperaList = filtered.filter(c=>c.esperaClienteMs>0 && ESTADOS_ABIERTOS.indexOf(c.estado)!==-1);
-
-  function diasAbierto(c){ const d = parseDateLocal(c.fecha); return (d && !isNaN(d.getTime())) ? Math.max(0, Math.floor((hoyMs-d.getTime())/864e5)) : null; }
-  function casoCard(c){
-    const col = ESTADO_COLOR[c.estado] || '#8b86a3';
-    const pl = plazoPorId[c.id];
-    const dias = ESTADOS_ABIERTOS.includes(c.estado) ? diasAbierto(c) : null;
-    const q = [c.folio,c.cliente,c.telefono,c.equipo,c.serial,c.falla,c.tecnicoNombre,c.asesorNombre,c.sucursal,c.observacion].join(' ').toLowerCase();
-    return '<div class="cc" data-q="'+esc(q)+'" style="border-left-color:'+col+';">'+
-      '<div class="cc-top"><span class="mono cc-folio">'+esc(c.folio||c.id)+'</span><span class="cc-tipo">'+TIPO_ICON[tipoOf(c)]+' '+esc(tipoOf(c))+'</span><span class="cc-est" style="background:'+col+'26;color:'+col+';">'+esc(c.estado)+'</span></div>'+
-      '<div class="cc-cli">'+esc(c.cliente||'—')+(c.telefono?'<span class="cc-tel">📱 '+esc(c.telefono)+'</span>':'')+'</div>'+
-      '<div class="cc-eq">'+esc(c.equipo||'—')+(c.serial?' · <span class="mono">'+esc(c.serial)+'</span>':'')+'</div>'+
-      '<div class="cc-falla">🔧 '+esc(c.falla||'—')+'</div>'+
-      '<div class="cc-meta"><span>🏷️ '+esc(BRAND_LABEL[c.marca]||c.marca)+(c.sucursal?' · '+esc(c.sucursal):'')+'</span><span>🧑‍🔧 '+esc(c.tecnicoNombre||'Sin asignar')+'</span><span>🎧 '+esc(c.asesorNombre||'—')+'</span></div>'+
-      '<div class="cc-fechas"><span>📅 '+esc(fmtDateShort(c.fecha))+'</span>'+
-        (dias!=null ? '<span class="'+(dias>=plazoDias && !(c.esperaClienteMs>0)?'warn':'')+'">⏱️ '+dias+' día'+(dias===1?'':'s')+' abierto</span>' : '')+
-        (c.fechaResolucion ? '<span>✅ '+esc(fmtDateShort(c.fechaResolucion))+' · '+esc(fmtDuration(c.tiempoResolucionHoras))+'</span>' : '')+
-        (isEntregado(c) ? '<span>📦 Entregado'+(c.fechaEntrega?' '+esc(fmtDateShort(c.fechaEntrega)):'')+'</span>' : (isPorEntregar(c) ? '<span class="warn">📦 Por entregar</span>' : ''))+
-      '</div>'+
-      (c.esperaClienteMs>0 && ESTADOS_ABIERTOS.indexOf(c.estado)!==-1 ? '<div class="cc-espera">⏸️ Esperando al cliente desde '+esc(fmtDateShort(new Date(c.esperaClienteMs).toISOString().slice(0,10)))+' ('+Math.floor((hoyMs-c.esperaClienteMs)/864e5)+' d)'+(c.esperaClienteNota?' — '+esc(c.esperaClienteNota):'')+'</div>' : '')+
-      (pl ? '<div class="cc-alerta">⏰ '+pl.m.map(y=>esc(y.t)).join(' · ')+'</div>' : '')+
-      ((c.incidencias||[]).length ? '<div class="cc-inc">⚠️ '+esc(c.incidencias.join(', '))+'</div>' : '')+
-      (c.reincidenciaDe ? '<div class="cc-inc">🔁 Reincidencia de '+esc(c.reincidenciaDe)+'</div>' : '')+
-      '<div class="cc-obs">'+(c.observacion ? '📝 <b>Observación del técnico:</b> '+esc(c.observacion) : '<i>Sin observación del técnico</i>')+'</div>'+
-    '</div>';
-  }
-  const gruposDef = [
-    {t:'⏳ Pendientes', d:'Recibidos y todavía sin atender', est:['Pendiente'], open:true, orden:'viejos'},
-    {t:'🔧 En proceso', d:'En revisión o en reparación', est:['En revisión','En proceso'], open:true, orden:'viejos'},
-    {t:'✅ Resueltas', d:'Primero las que faltan por entregar', est:['Resuelto'], open:true, orden:'entrega'},
-    {t:'⛔ No procede', d:'Casos donde la garantía no aplicó', est:['No procede'], open:false, orden:'nuevos'}
-  ];
-  function grupoHtml(g){
-    const lista = filtered.filter(c=>g.est.indexOf(c.estado)!==-1).sort((a,b)=>{
-      if(g.orden==='viejos') return String(a.fecha).localeCompare(String(b.fecha));
-      if(g.orden==='entrega'){ const pa = isPorEntregar(a)?0:1, pb = isPorEntregar(b)?0:1; if(pa!==pb) return pa-pb; }
-      return String(b.fecha).localeCompare(String(a.fecha));
-    });
-    return '<details class="gr"'+(g.open?' open':'')+'><summary><span class="gr-t">'+g.t+'</span><span class="gr-n">'+lista.length+'</span><span class="gr-d">'+esc(g.d)+'</span></summary>'+
-      (lista.length ? '<div class="cards">'+lista.map(casoCard).join('')+'</div>' : '<div class="hint" style="padding:4px 2px 10px;">No hay casos en esta sección.</div>')+'</details>';
-  }
-  const estadosHtml = gruposDef.map(grupoHtml).join('');
-
-  /* Técnicos: tarjetas con lo importante de cada uno */
-  const tecMap = {};
-  filtered.forEach(c=>{
-    const n = c.tecnicoNombre || 'Sin asignar';
-    const o = tecMap[n] || (tecMap[n] = {n:n, total:0, pend:0, proc:0, res:0, np:0, horas:[], plazo:0, reinc:0, porEnt:0, sinObs:0});
-    o.total++;
-    if(c.estado==='Pendiente') o.pend++; else if(c.estado==='Resuelto') o.res++; else if(c.estado==='No procede') o.np++; else o.proc++;
-    if((c.estado==='Resuelto') && typeof c.tiempoResolucionHoras==='number') o.horas.push(c.tiempoResolucionHoras);
-    if(c.reincidenciaDe) o.reinc++;
-    if(isPorEntregar(c)) o.porEnt++;
-    if(ESTADOS_ABIERTOS.indexOf(c.estado)!==-1 && !c.observacion) o.sinObs++;
-  });
-  plazoRows.forEach(x=>{ const c = casoPorId[x.c.id]; if(c){ const n = c.tecnicoNombre || 'Sin asignar'; if(tecMap[n]) tecMap[n].plazo++; } });
-  const tecList = Object.keys(tecMap).map(k=>tecMap[k]).sort((a,b)=>b.total-a.total);
-  const tecCards = tecList.length ? '<div class="tec-grid">'+tecList.map(t=>{
-    const prom = t.horas.length ? t.horas.reduce((a,b)=>a+b,0)/t.horas.length : null;
-    const tot = Math.max(1, t.total);
-    return '<div class="tec">'+
-      '<div class="tec-h"><b>'+esc(t.n)+'</b><span class="tec-n">'+t.total+' caso'+(t.total===1?'':'s')+'</span></div>'+
-      '<div class="stack"><i style="width:'+(t.pend/tot*100)+'%;background:'+ESTADO_COLOR['Pendiente']+'"></i><i style="width:'+(t.proc/tot*100)+'%;background:'+ESTADO_COLOR['En proceso']+'"></i><i style="width:'+(t.res/tot*100)+'%;background:'+ESTADO_COLOR['Resuelto']+'"></i><i style="width:'+(t.np/tot*100)+'%;background:'+ESTADO_COLOR['No procede']+'"></i></div>'+
-      '<div class="tec-st"><span><b>'+t.pend+'</b> pendientes</span><span><b>'+t.proc+'</b> en proceso</span><span><b>'+t.res+'</b> resueltos</span><span><b>'+t.np+'</b> no procede</span></div>'+
-      '<div class="tec-x"><span>✅ '+Math.round(t.res/tot*100)+'% resolución</span><span>⏱️ '+esc(fmtDuration(prom))+' promedio</span><span class="'+(t.plazo?'bad':'')+'">⏰ '+t.plazo+' con plazo vencido</span><span>📦 '+t.porEnt+' por entregar</span><span>🔁 '+t.reinc+' reincidencias</span><span class="'+(t.sinObs?'warn':'')+'">📝 '+t.sinObs+' abiertos sin observación</span></div>'+
-    '</div>';
-  }).join('')+'</div>' : '<div class="hint">No hay casos en este período.</div>';
-
-  /* Barras simples (sin gráfica) para sucursal, marca e incidencias */
-  function barsHtml(pairs, color){
-    if(!pairs.length) return '<div class="hint">Sin datos en este período.</div>';
-    const max = Math.max.apply(null, pairs.map(p=>p[1]).concat([1]));
-    return '<div class="bars">'+pairs.map(p=>'<div class="bar-row"><div class="bar-l">'+esc(p[0])+'</div><div class="bar-t"><div class="bar-f" style="width:'+Math.round(p[1]/max*100)+'%;background:'+color+';"></div></div><div class="bar-v">'+p[1]+'</div></div>').join('')+'</div>';
-  }
-  const infoPanels =
-    '<div class="grid2">'+
-      '<div class="panel"><div class="panel-title">🏬 Casos por sucursal</div>'+barsHtml(porSucursal,'#3987e5')+'</div>'+
-      (variasMarcas ? '<div class="panel"><div class="panel-title">🏷️ Casos por marca</div>'+barsHtml(porMarca,'#8b6ef0')+'</div>' : '')+
-      '<div class="panel"><div class="panel-title">⚠️ Incidencias registradas</div>'+barsHtml(porIncidencia,'#e66767')+'</div>'+
-    '</div>';
-
-  const nFallas = Math.max(1, REPORT_DATA.falla.labels.length), nTec = Math.max(1, REPORT_DATA.tecnico.labels.length);
-  const hFalla = Math.max(200, Math.min(520, nFallas*30+50)), hTec = Math.max(200, Math.min(520, nTec*34+50));
-  const esperaHtml = esperaList.length ? (
-    '<div class="panel" style="margin-top:14px;"><div class="panel-title">⏸️ Casos esperando al cliente</div><div class="tbl-wrap"><table class="rtbl"><thead><tr><th>Caso</th><th>Cliente</th><th>Técnico</th><th>Desde</th><th>Días</th><th>Qué quedó pendiente</th></tr></thead><tbody>'+
-    esperaList.map(c=>{ const dd = Math.floor((hoyMs-c.esperaClienteMs)/864e5); return '<tr><td class="mono">'+esc(c.folio||c.id)+'</td><td>'+esc(c.cliente||'—')+'</td><td>'+esc(c.tecnicoNombre||'Sin asignar')+'</td><td class="num">'+esc(fmtDateShort(new Date(c.esperaClienteMs).toISOString().slice(0,10)))+'</td><td class="num '+(dd>=clienteDias?'warn':'')+'">'+dd+'</td><td>'+esc(c.esperaClienteNota||'—')+'</td></tr>'; }).join('')+
-    '</tbody></table></div><div class="hint">La demora del cliente no cuenta como falla del técnico. Se marca en amarillo desde los '+clienteDias+' días sin respuesta.</div></div>'
-  ) : '';
-  const kpiNuevo = [
-    kpiCard('accent-v','Total de casos', k.total, TIPO_ICON['Garantía']+' '+k.garantias+' garantía'+(k.garantias===1?'':'s')+' · '+TIPO_ICON['Servicio Técnico']+' '+k.servicios+' servicio'+(k.servicios===1?'':'s')),
-    kpiCard('accent-y','⏳ Pendientes', nPend, 'sin atender'),
-    kpiCard('accent-v','🔧 En proceso', nProc, 'en revisión o reparación'),
-    kpiCard('accent-g','✅ Resueltas', nRes, k.pctResolucion+'% de resolución'),
-    kpiCard('accent-b','📦 Por entregar', nPorEntregar, 'resueltas sin retirar'),
-    kpiCard(plazoRows.length?'accent-r':'','⏰ Plazo vencido', plazoRows.length, 'más de '+plazoDias+' días sin atención del técnico'),
-    kpiCard('accent-b','⏸️ Esperando al cliente', esperaList.length, 'no cuenta como demora del técnico'),
-    kpiCard('','⏱️ Tiempo promedio', fmtDuration(k.tiempoProm), 'recepción → resolución'),
-    kpiCard('','🔁 Reincidencias', k.reincidencias, k.pctReincidencia+'% volvieron'),
-  ].join('');
-
-  const initJsNuevo = [
-    'var D = '+dataJson+';',
-    'var PALETTE = '+paletteJson+';',
-    'if(typeof Chart !== "undefined"){ Chart.defaults.color = "#c3bfd6"; Chart.defaults.font.family = "-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif"; Chart.defaults.font.size = 11.5; Chart.defaults.borderColor = "#2c2740"; }',
-    'var gridCfg = {color:"rgba(255,255,255,.06)", drawTicks:false};',
-    'var axisBase = {grid:gridCfg, border:{display:false}, ticks:{color:"#8b86a3"}};',
-    'var tipCfg = {backgroundColor:"#1b1727", borderColor:"#2c2740", borderWidth:1, padding:10};',
-    'function mk(id, cfg){ var el = document.getElementById(id); if(!el || typeof Chart==="undefined") return; try{ new Chart(el.getContext("2d"), cfg); }catch(e){} }',
-    'function barH(id, labels, values){ mk(id, {type:"bar", data:{labels:labels, datasets:[{data:values, backgroundColor:labels.map(function(_,i){return PALETTE[i%PALETTE.length];}), borderRadius:6, maxBarThickness:20}]}, options:{indexAxis:"y", responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}, tooltip:tipCfg}, scales:{x:Object.assign({},axisBase,{beginAtZero:true,ticks:{color:"#8b86a3",precision:0}}), y:Object.assign({},axisBase)}}}); }',
-    'function donut(id, labels, values, colors){ mk(id, {type:"doughnut", data:{labels:labels, datasets:[{data:values, backgroundColor:colors, borderColor:"#161320", borderWidth:3}]}, options:{responsive:true, maintainAspectRatio:false, cutout:"62%", plugins:{legend:{position:"bottom", labels:{boxWidth:9,boxHeight:9,padding:12,font:{size:11}}}, tooltip:tipCfg}}}); }',
-    'barH("ch-falla", D.falla.labels, D.falla.values);',
-    'if(D.tipo){ donut("ch-tipo", D.tipo.labels, D.tipo.values, ["#8b6ef0","#3987e5"]); }',
-    'barH("ch-tecnico", D.tecnico.labels, D.tecnico.values);',
-    'var q = document.getElementById("q"), qc = document.getElementById("qcount"), prev = "";',
-    'function filtrar(){ var v = q.value.trim().toLowerCase(), n = 0; var cs = document.querySelectorAll(".cc"); for(var i=0;i<cs.length;i++){ var ok = !v || cs[i].getAttribute("data-q").indexOf(v)!==-1; cs[i].style.display = ok ? "" : "none"; if(ok) n++; } var ds = document.querySelectorAll("details.gr"); for(var j=0;j<ds.length;j++){ var cc = ds[j].querySelectorAll(".cc"), vis = 0; for(var k=0;k<cc.length;k++){ if(cc[k].style.display!=="none") vis++; } if(v){ ds[j].style.display = vis ? "" : "none"; if(vis) ds[j].open = true; } else { ds[j].style.display = ""; } } if(qc) qc.textContent = v ? (n ? n + (n===1 ? " caso encontrado" : " casos encontrados") : "No encontré ningún caso con ese dato.") : ""; if(v && !prev){ var b = document.getElementById("casos"); if(b) b.scrollIntoView({behavior:"smooth", block:"start"}); } prev = v; }',
-    'if(q){ q.addEventListener("input", filtrar); }',
-    'window.addEventListener("beforeprint", function(){ var ds = document.querySelectorAll("details.gr"); for(var j=0;j<ds.length;j++){ ds[j].open = true; } });'
-  ].join('\n');
-
-  const cssNuevo = `
-:root{color-scheme:dark;--bg:#0c0b13;--panel:#161320;--panel-2:#1b1727;--line:#2c2740;--line-soft:#211d2e;--text:#f5f4fb;--text-dim:#c3bfd6;--text-faint:#8b86a3;--violet:#8b6ef0;--violet-soft:#a996f7;}
-*{box-sizing:border-box;}
-body{margin:0;background:radial-gradient(900px 480px at 10% -8%, rgba(139,110,240,.14), transparent 60%),var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5;-webkit-text-size-adjust:100%;}
-.mono{font-family:ui-monospace,"SF Mono",Consolas,monospace;}
-h1,h2,h3{margin:0;letter-spacing:-.2px;}
-.wrap{max-width:1180px;margin:0 auto;padding:26px 18px 70px;}
-.hero{padding:24px 24px;border-radius:20px;margin-bottom:20px;background:linear-gradient(150deg, rgba(139,110,240,.20), rgba(57,135,229,.05) 60%), var(--panel);border:1px solid var(--line-soft);}
-.hero .eyebrow{font-size:11px;letter-spacing:2.4px;text-transform:uppercase;color:var(--violet-soft);font-weight:800;margin-bottom:8px;}
-.hero h1{font-size:23px;margin-bottom:8px;}
-.hero .sub{font-size:13px;color:var(--text-dim);margin-bottom:12px;}
-.pills{display:flex;gap:8px;flex-wrap:wrap;}
-.pill{display:inline-flex;padding:5px 12px;border-radius:999px;background:rgba(0,0,0,.28);border:1px solid var(--line);font-size:12px;color:var(--text-dim);font-weight:600;}
-.btn-print{margin-top:14px;background:var(--violet);color:#fff;border:0;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer;}
-.block{margin:26px 0;}
-.block-title{font-size:15px;font-weight:800;margin-bottom:10px;}
-.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;}
-.kpi{background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;padding:14px 15px;}
-.kpi .lbl{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--text-faint);font-weight:700;margin-bottom:6px;}
-.kpi .val{font-size:24px;font-weight:800;letter-spacing:-.5px;}
-.kpi .sub{margin-top:4px;font-size:11px;color:var(--text-faint);}
-.kpi.accent-v{border-color:rgba(139,110,240,.4);}.kpi.accent-v .val{color:var(--violet-soft);}
-.kpi.accent-y{border-color:rgba(242,182,50,.4);}.kpi.accent-y .val{color:#f7cd6e;}
-.kpi.accent-g{border-color:rgba(12,163,12,.35);}.kpi.accent-g .val{color:#5ad35a;}
-.kpi.accent-b{border-color:rgba(57,135,229,.4);}.kpi.accent-b .val{color:#7ab0ef;}
-.kpi.accent-r{border-color:rgba(229,72,77,.55);}.kpi.accent-r .val{color:#ff8b8f;}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px;}
-.panel{background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;padding:16px;}
-.panel-title{font-size:13.5px;font-weight:800;margin-bottom:10px;}
-.chart-box{position:relative;width:100%;}
-.hint{font-size:11.5px;color:var(--text-faint);margin-top:8px;}
-.bars{display:flex;flex-direction:column;gap:7px;}
-.bar-row{display:grid;grid-template-columns:minmax(80px,38%) 1fr 30px;gap:8px;align-items:center;font-size:12px;}
-.bar-l{color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.bar-t{height:9px;background:var(--panel-2);border-radius:6px;overflow:hidden;}
-.bar-f{height:100%;border-radius:6px;}
-.bar-v{text-align:right;font-weight:700;}
-.searchbar{width:100%;margin:0 0 12px;padding:11px 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:14px;}
-details.gr{background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;margin-bottom:12px;padding:0 14px;}
-details.gr>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:13px 0;}
-details.gr>summary::-webkit-details-marker{display:none;}
-.gr-t{font-weight:800;font-size:14.5px;}
-.gr-n{background:var(--violet);color:#fff;border-radius:999px;padding:1px 10px;font-size:12px;font-weight:800;}
-.gr-d{font-size:11.5px;color:var(--text-faint);}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px;padding:2px 0 14px;}
-.cc{background:var(--panel-2);border:1px solid var(--line-soft);border-left:5px solid #8b86a3;border-radius:12px;padding:12px 13px;font-size:12.5px;}
-.cc-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
-.cc-folio{font-size:11px;color:var(--text-faint);}
-.cc-tipo{font-size:11px;color:var(--text-dim);}
-.cc-est{margin-left:auto;font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:999px;}
-.cc-cli{font-weight:800;font-size:14px;}
-.cc-tel{font-weight:500;font-size:11.5px;color:var(--text-faint);margin-left:8px;}
-.searchwrap{position:sticky;top:0;z-index:20;background:var(--bg);padding:8px 0 4px;margin-bottom:4px;}
-#casos{scroll-margin-top:84px;}
-.cc-eq{color:var(--text-dim);margin-top:2px;}
-.cc-falla{margin-top:6px;font-weight:600;}
-.cc-meta,.cc-fechas{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;color:var(--text-faint);font-size:11.5px;}
-.warn{color:#f7cd6e;font-weight:700;}
-.bad{color:#ff8b8f;font-weight:700;}
-.cc-espera{margin-top:7px;padding:6px 9px;border-radius:8px;background:rgba(57,135,229,.14);color:#8fbcf2;font-size:11.5px;font-weight:600;}
-.cc-alerta{margin-top:7px;padding:6px 9px;border-radius:8px;background:rgba(229,72,77,.14);color:#ff9a9d;font-size:11.5px;font-weight:600;}
-.cc-inc{margin-top:6px;font-size:11.5px;color:#f7cd6e;}
-.cc-obs{margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,.25);font-size:12px;color:var(--text-dim);white-space:pre-wrap;}
-.tec-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;}
-.tec{background:var(--panel);border:1px solid var(--line-soft);border-radius:14px;padding:14px;}
-.tec-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px;font-size:14.5px;}
-.tec-n{font-size:12px;color:var(--text-faint);}
-.stack{display:flex;height:10px;border-radius:6px;overflow:hidden;background:var(--panel-2);}
-.stack i{display:block;height:100%;}
-.tec-st{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px;font-size:11.5px;color:var(--text-dim);}
-.tec-x{display:flex;flex-direction:column;gap:3px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--text-faint);}
-.tbl-wrap{overflow-x:auto;border:1px solid var(--line-soft);border-radius:12px;margin-top:6px;}
-table.rtbl{width:100%;border-collapse:collapse;font-size:12px;min-width:560px;}
-table.rtbl th{text-align:left;padding:9px 11px;background:var(--panel-2);color:var(--text-faint);font-size:10px;text-transform:uppercase;letter-spacing:.8px;white-space:nowrap;}
-table.rtbl td{padding:9px 11px;border-top:1px solid var(--line-soft);vertical-align:top;}
-.foot{margin-top:36px;text-align:center;color:var(--text-faint);font-size:11.5px;}
-@media(max-width:600px){.wrap{padding:14px 10px 50px;}.hero{padding:18px 16px;}.hero h1{font-size:19px;}.cards{grid-template-columns:1fr;}.kpi .val{font-size:21px;}}
-@media print{
-  :root{color-scheme:light;--bg:#fff;--panel:#fff;--panel-2:#f3f3f8;--line:#ccc;--line-soft:#ddd;--text:#111;--text-dim:#333;--text-faint:#555;--violet-soft:#5b3fd0;}
-  body{background:#fff !important;font-size:12px;}
-  .noprint{display:none !important;}
-  .cc{break-inside:avoid;}
-  .cc-obs{background:#f3f3f8;}
-}
-`;
-
-  return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Reporte de Garantías — '+esc(REPORT_DATA.meta.fromLabel)+' a '+esc(REPORT_DATA.meta.toLabel)+'</title><style>'+cssNuevo+'</style></head><body><div class="wrap">'+
-  '<div class="hero"><div class="eyebrow">✦ Reporte de garantías y servicio técnico</div><h1>🛠️ Mesa de Garantías</h1>'+
+  return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Reporte de Garantías — '+esc(REPORT_DATA.meta.fromLabel)+' a '+esc(REPORT_DATA.meta.toLabel)+'</title><style>'+
+  ':root{color-scheme:dark;--bg:#0c0b13;--bg-2:#100e19;--panel:#161320;--panel-2:#1b1727;--line:#2c2740;--line-soft:#211d2e;--text:#f5f4fb;--text-dim:#c3bfd6;--text-faint:#8b86a3;--violet:#8b6ef0;--violet-soft:#a996f7;--blue:#3987e5;--blue-soft:#7ab0ef;}'+
+  '*{box-sizing:border-box;}body{margin:0;background:radial-gradient(900px 480px at 10% -8%, rgba(139,110,240,.14), transparent 60%),radial-gradient(820px 460px at 100% 0%, rgba(57,135,229,.10), transparent 55%),var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.5;}'+
+  '.mono{font-family:ui-monospace,"SF Mono",Consolas,monospace;}h1,h2,h3{font-family:inherit;margin:0;letter-spacing:-.2px;}'+
+  '.wrap{max-width:1280px;margin:0 auto;padding:34px 28px 70px;}'+
+  '.hero{position:relative;padding:28px 30px;border-radius:22px;overflow:hidden;margin-bottom:26px;background:linear-gradient(150deg, rgba(139,110,240,.20), rgba(57,135,229,.05) 60%), var(--panel);border:1px solid var(--line-soft);}'+
+  '.hero .eyebrow{font-size:11px;letter-spacing:2.6px;text-transform:uppercase;color:var(--violet-soft);font-weight:800;margin-bottom:10px;}'+
+  '.hero h1{font-size:25px;margin-bottom:8px;}.hero .sub{font-size:13.5px;color:var(--text-dim);margin-bottom:14px;}'+
+  '.pills{display:flex;gap:9px;flex-wrap:wrap;}.pill{display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border-radius:999px;background:rgba(0,0,0,.28);border:1px solid var(--line);font-size:12px;color:var(--text-dim);font-weight:600;}'+
+  '.block{margin:30px 0;}.block-title{font-size:15px;font-weight:800;margin-bottom:12px;}'+
+  '.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}@media(max-width:900px){.kpi-grid{grid-template-columns:repeat(2,1fr);}}'+
+  '.kpi{background:var(--panel);border:1px solid var(--line-soft);border-radius:16px;padding:18px;}.kpi .lbl{font-size:10.5px;letter-spacing:1.1px;text-transform:uppercase;color:var(--text-faint);font-weight:700;margin-bottom:8px;}.kpi .val{font-size:26px;font-weight:800;letter-spacing:-.6px;}.kpi .sub{margin-top:6px;font-size:11.5px;color:var(--text-dim);font-weight:600;}'+
+  '.kpi.accent-v{border-color:rgba(139,110,240,.4);}.kpi.accent-v .val{color:var(--violet-soft);}.kpi.accent-y{border-color:rgba(242,182,50,.4);}.kpi.accent-y .val{color:#f7cd6e;}.kpi.accent-g{border-color:rgba(12,163,12,.35);}.kpi.accent-g .val{color:#5ad35a;}.kpi.accent-b{border-color:rgba(57,135,229,.4);}.kpi.accent-b .val{color:var(--blue-soft);}'+
+  '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}@media(max-width:1000px){.grid2{grid-template-columns:1fr;}}'+
+  '.panel{background:var(--panel);border:1px solid var(--line-soft);border-radius:16px;padding:20px;}.panel-title{font-size:13.5px;font-weight:800;margin-bottom:12px;}'+
+  '.chart-box{position:relative;width:100%;height:260px;}'+
+  '.tbl-wrap{overflow-x:auto;border:1px solid var(--line-soft);border-radius:12px;margin-top:6px;}table.rtbl{width:100%;border-collapse:collapse;font-size:12px;min-width:600px;}table.rtbl th{text-align:left;padding:9px 11px;background:var(--panel-2);color:var(--text-faint);font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;border-bottom:1px solid var(--line);white-space:nowrap;}table.rtbl td{padding:8px 11px;border-bottom:1px solid var(--line-soft);color:var(--text-dim);}table.rtbl td.num{text-align:right;font-variant-numeric:tabular-nums;}'+
+  '.hint{font-size:11.5px;color:var(--text-faint);margin-top:8px;}.foot{margin-top:40px;text-align:center;color:var(--text-faint);font-size:11.5px;}'+
+  '</style></head><body><div class="wrap">'+
+  '<div class="hero"><div class="eyebrow">✦ Reporte ejecutivo</div><h1>🛠️ Mesa de Garantías — Tekio · Infot · Mega Laptop</h1>'+
   '<div class="sub">Período: <b>'+esc(REPORT_DATA.meta.fromLabel)+'</b> — <b>'+esc(REPORT_DATA.meta.toLabel)+'</b> · '+esc(REPORT_DATA.meta.marcaLabel)+' · '+esc(REPORT_DATA.meta.tipoLabel)+(REPORT_DATA.meta.tecnicoLabel?' · '+esc(REPORT_DATA.meta.tecnicoLabel):'')+' · Generado el '+esc(REPORT_DATA.meta.generatedAt)+'</div>'+
-  '<div class="pills"><span class="pill">🗂️ '+k.total+' caso'+(k.total===1?'':'s')+'</span><span class="pill">✅ '+k.pctResolucion+'% resueltos</span><span class="pill">⏱️ '+esc(fmtDuration(k.tiempoProm))+' promedio</span></div>'+
-  '<button class="btn-print noprint" onclick="window.print()">🖨️ Guardar como PDF / imprimir</button></div>'+
-  '<div class="searchwrap noprint"><input type="search" id="q" class="searchbar" style="margin:0;" placeholder="🔎 Buscar un cliente (nombre, teléfono, folio, serial, equipo, técnico)…"><div class="hint" id="qcount" style="margin:4px 2px 0;"></div></div>'+
-  '<div class="block"><div class="block-title">Resumen</div><div class="kpi-grid">'+kpiNuevo+'</div></div>'+
-  (brandTableHtml ? '<div class="block">'+brandTableHtml+'</div>' : '')+
-  '<div class="block"><div class="block-title">Lo más importante</div><div class="grid2">'+
-    '<div class="panel"><div class="panel-title">🔧 Tipos de falla</div><div class="chart-box" style="height:'+hFalla+'px;"><canvas id="ch-falla"></canvas></div></div>'+
-    (REPORT_DATA.tipo ? '<div class="panel"><div class="panel-title">🛡️🔧 Garantía vs. Servicio técnico</div><div class="chart-box" style="height:260px;"><canvas id="ch-tipo"></canvas></div></div>' : '')+
-    '<div class="panel"><div class="panel-title">🧑‍🔧 Casos por técnico</div><div class="chart-box" style="height:'+hTec+'px;"><canvas id="ch-tecnico"></canvas></div></div>'+
+  '<div class="pills"><span class="pill">🗂️ '+k.total+' registro'+(k.total===1?'':'s')+'</span><span class="pill">✅ '+k.pctResolucion+'% resueltas</span><span class="pill">⏱️ '+esc(fmtDuration(k.tiempoProm))+' promedio</span></div></div>'+
+  '<div class="block"><div class="block-title">Resumen general</div><div class="kpi-grid">'+kpiHtml+'</div></div>'+
+  (brandTableHtml? ('<div class="block">'+brandTableHtml+'</div>') : '')+
+  '<div class="block"><div class="block-title">'+esc(REPORT_DATA.evol.unit)+'</div><div class="panel"><div class="chart-box" style="height:280px;"><canvas id="ch-evol"></canvas></div></div></div>'+
+  '<div class="block"><div class="block-title">Distribución</div><div class="grid2">'+
+  '<div class="panel"><div class="panel-title">🍩 Por estado</div><div class="chart-box"><canvas id="ch-estado"></canvas></div></div>'+
+  (REPORT_DATA.tipo? '<div class="panel"><div class="panel-title">🛡️🔧 Garantía vs. Servicio técnico</div><div class="chart-box"><canvas id="ch-tipo"></canvas></div></div>' : (REPORT_DATA.marca? '<div class="panel"><div class="panel-title">🏷️ Por marca</div><div class="chart-box"><canvas id="ch-marca"></canvas></div></div>' : '<div class="panel"><div class="panel-title">🏬 Por sucursal</div><div class="chart-box"><canvas id="ch-sucursal"></canvas></div></div>'))+
   '</div></div>'+
-  '<div class="block" id="casos"><div class="block-title">Casos por estado</div>'+estadosHtml+'</div>'+
-  '<div class="block"><div class="block-title">🧑‍🔧 Técnicos</div>'+tecCards+
-    '<div class="hint">Un técnico con más casos puede haber recibido más asignaciones; y una reincidencia no siempre significa una reparación mal hecha.</div></div>'+
-  '<div class="block"><div class="block-title">⏰ Seguimiento del técnico</div>'+plazoHtml+esperaHtml+'</div>'+
-  '<div class="block"><div class="block-title">Más información</div>'+infoPanels+'</div>'+
+  (REPORT_DATA.tipo? ('<div class="block"><div class="grid2">'+
+    (REPORT_DATA.marca? '<div class="panel"><div class="panel-title">🏷️ Por marca</div><div class="chart-box"><canvas id="ch-marca"></canvas></div></div>' : '')+
+    '<div class="panel"><div class="panel-title">🏬 Por sucursal</div><div class="chart-box"><canvas id="ch-sucursal"></canvas></div></div>'+
+    '</div></div>') : (REPORT_DATA.marca? ('<div class="block"><div class="panel"><div class="panel-title">🏬 Por sucursal</div><div class="chart-box"><canvas id="ch-sucursal"></canvas></div></div></div>') : ''))+
+  '<div class="block"><div class="block-title">Técnicos y fallas</div><div class="grid2">'+
+  '<div class="panel"><div class="panel-title">🧑‍🔧 Casos por técnico</div><div class="chart-box"><canvas id="ch-tecnico"></canvas></div></div>'+
+  '<div class="panel"><div class="panel-title">🔧 Tipos de falla</div><div class="chart-box"><canvas id="ch-falla"></canvas></div></div>'+
+  '</div></div>'+
+  '<div class="block"><div class="panel"><div class="panel-title">⚠️ Tipos de incidencia</div><div class="chart-box"><canvas id="ch-incidencia"></canvas></div>'+(porIncidencia.length===0?'<div class="hint">✅ No hay incidencias registradas en este período.</div>':'')+'</div></div>'+
+  (techMetrics.length? ('<div class="block"><div class="block-title">Desempeño técnico</div><div class="panel" style="margin-bottom:16px;"><div class="panel-title">📦 Comparativa visual</div><div class="chart-box" style="height:280px;"><canvas id="ch-techcompare"></canvas></div></div>'+techTableHtml+'</div>') : '')+
+  '<div class="block"><div class="block-title">⏰ Seguimiento del técnico</div>'+plazoHtml+'</div>'+
   '<div class="block"><div class="block-title">🔁 Reincidencias</div>'+reincHtml+'</div>'+
-  '<div class="foot">Generado por la Mesa de Garantías el '+esc(REPORT_DATA.meta.generatedAt)+'.</div>'+
+  '<div class="block"><div class="block-title">Todos los casos del período ('+casesRows.length+')</div>'+casesTableHtml+'</div>'+
+  '<div class="foot">Generado automáticamente por Mesa de Garantías el '+esc(REPORT_DATA.meta.generatedAt)+'.</div>'+
   '</div>'+
   scriptOpen+chartSrc+scriptClose+
-  scriptOpen+initJsNuevo+scriptClose+
+  scriptOpen+initJs+scriptClose+
   '</body></html>';
 }
 
@@ -12299,7 +12381,6 @@ function openCaseModal(caseId){
           <button class="btn yellow sm" id="btn-mark-pending">Marcar como pendiente</button>
           <button class="btn blue sm" id="btn-mark-resolved">Marcar como resuelto</button>
           <button class="btn ghost sm" id="btn-comprobantes">📸 Comprobantes de contacto</button>
-          ${(c.estado!=='Resuelto' && c.estado!=='No procede') ? `<button class="btn ghost sm" id="btn-espera">${c.esperaClienteMs>0?'▶️ El cliente respondió':'⏸️ Esperando al cliente'}</button>` : ''}
           ${!isEntregado(c)?'<button class="btn green sm" id="btn-mark-delivered">📦 Marcar como entregado</button>':''}
           ${isAdmin?`<span style="flex:1;"></span><button class="btn danger sm" id="btn-delete-case">🗑️ Eliminar caso</button>`:''}
         </div>
@@ -12323,20 +12404,6 @@ function openCaseModal(caseId){
 
   const btnComp = document.getElementById('btn-comprobantes');
   if(btnComp) btnComp.addEventListener('click', ()=> gmVerComprobantes(c.id));
-
-  const btnEsp = document.getElementById('btn-espera');
-  if(btnEsp) btnEsp.addEventListener('click', async ()=>{
-    if(c.esperaClienteMs>0){
-      await Store.updateCase(c.id, {esperaClienteMs:0, esperaClienteNota:''});
-      toast('El caso vuelve a contar el seguimiento del técnico');
-    } else {
-      const t = window.prompt('Esperando al cliente. ¿Qué quedó pendiente? (ej. "va a decidir si repara")','');
-      if(t===null) return;
-      await Store.updateCase(c.id, {esperaClienteMs:Date.now(), esperaClienteNota:t.trim()});
-      toast('Caso en espera del cliente: no cuenta como demora del técnico');
-    }
-    closeModal();
-  });
 
   const incBox = document.getElementById('edit-incidencias');
   if(incBox) incBox.querySelectorAll('[data-inc-chip]').forEach(ch=>{
